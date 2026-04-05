@@ -1,0 +1,39 @@
+@import "tailwindcss";
+
+/* ── Theme tokens ────────────────────────────────────────────────────────────── */
+@theme {
+  --color-space-black: #050B14;
+  --color-nasa-blue:   #0B3D91;
+  --color-nasa-red:    #FC3D21;
+
+  --font-sans: 'Inter', sans-serif;
+  --font-mono: 'JetBrains Mono', monospace;
+}
+
+/* ── Base ────────────────────────────────────────────────────────────────────── */
+@layer base {
+  body {
+    background-color: var(--color-space-black);
+    color: white;
+    font-family: var(--font-sans);
+    margin: 0;
+    padding: 0;
+    overflow: hidden;
+  }
+}
+
+/* ── Utilities ───────────────────────────────────────────────────────────────── */
+@layer utilities {
+  .glass-panel {
+    background-color: color-mix(in srgb, var(--color-space-black) 50%, transparent);
+    backdrop-filter: blur(16px);
+    -webkit-backdrop-filter: blur(16px);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    border-radius: 0.75rem;
+    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.6);
+  }
+
+  .glow-text       { text-shadow: 0 0 10px rgba(255, 255, 255, 0.5); }
+  .glow-text-blue  { text-shadow: 0 0 12px rgba(11, 61, 145, 0.9);  }
+  .glow-text-red   { text-shadow: 0 0 12px rgba(252, 61, 33, 0.9);  }
+}

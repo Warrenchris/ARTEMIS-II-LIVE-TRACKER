@@ -1,0 +1,169 @@
+import React, { useEffect, useRef, useState } from 'react';
+import { motion, AnimatePresence } from 'framer-motion';
+import { useTelemetry } from '../../contexts/TelemetryContext';
+import { Activity, Zap, Navigation, Clock, Signal, Wifi, WifiOff, Loader2 } from 'lucide-react';
+
+// ── Animated Number Counter ────────────────────────────────────────────────────
+const AnimatedNumber = ({ value, decimals = 0, color = 'text-white' }) => {
+  const [displayed, setDisplayed] = useState(parseFloat(value) || 0);
+  const animRef  = useRef(null);
+  const prevRef  = useRef(parseFloat(value) || 0);
+
+  useEffect(() => {
+    const target = parseFloat(value) || 0;
+    const start = prevRef.current;
+    const duration = 600;
+    const startTime = performance.now();
+
+    if (animRef.current) cancelAnimationFrame(animRef.current);
+
+    const tick = (now) => {
+      const elapsed = now - startTime;
+      const progress = Math.min(elapsed / duration, 1);
+      // Ease-out cubic
+      const eased = 1 - Math.pow(1 - progress, 3);
+      setDisplayed(start + (target - start) * eased);
+      if (progress < 1) animRef.current = requestAnimationFrame(tick);
+      else { prevRef.current = target; }
+    };
+    animRef.current = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(animRef.current);
+  }, [value]);
+
+  const formatted = decimals > 0
+    ? displayed.toLocaleString(undefined, { minimumFractionDigits: decimals, maximumFractionDigits: decimals })
+    : Math.round(displayed).toLocaleString();
+
+  return <span className={`font-mono tabular-nums ${color}`}>{formatted}</span>;
+};
+
+// ── Connection Badge ──────────────────────────────────────────────────────────
+const ConnectionBadge = ({ state }) => {
+  const config = {
+    SYNCED:     { icon: <Wifi size={12} />,        label: 'SYNCED',     cls: 'border-green-500/50 text-green-400'  },
+    OFFLINE:    { icon: <WifiOff size={12} />,     label: 'OFFLINE',    cls: 'border-red-500/50 text-red-400'     },
+    CONNECTING: { icon: <Loader2 size={12} className="animate-spin" />, label: 'CONNECTING', cls: 'border-yellow-500/50 text-yellow-400' },
+  };
+  const c = config[state] ?? config.CONNECTING;
+  return (
+    <span className={`flex items-center gap-1.5 px-2 py-1 rounded border bg-black/40 text-xs font-bold ${c.cls}`}>
+      {c.icon}{c.label}
+    </span>
+  );
+};
+
+// ── Health Dot ────────────────────────────────────────────────────────────────
+const HealthBadge = ({ health }) => {
+  const map = {
+    NOMINAL:   { color: 'text-green-400',  pulseCls: 'bg-green-400' },
+    SIMULATED: { color: 'text-yellow-400', pulseCls: 'bg-yellow-400' },
+    DEGRADED:  { color: 'text-red-400',    pulseCls: 'bg-red-400'   },
+    WARNING:   { color: 'text-red-400',    pulseCls: 'bg-red-400'   },
+  };
+  const m = map[health] ?? map.NOMINAL;
+  return (
+    <div className={`flex items-center gap-2 text-sm font-bold ${m.color}`}>
+      <span className={`w-2 h-2 rounded-full ${m.pulseCls} animate-pulse`} />
+      <Activity size={14} />
+      {health}
+    </div>
+  );
+};
+
+// ── Stat Row ──────────────────────────────────────────────────────────────────
+const StatRow = ({ icon, label, children }) => (
+  <div className="grid grid-cols-[18px_1fr] gap-2 items-start">
+    <div className="text-gray-500 mt-0.5">{icon}</div>
+    <div>
+      <div className="text-gray-400 text-[10px] uppercase tracking-widest mb-1">{label}</div>
+      <div className="text-xl leading-tight">{children}</div>
+    </div>
+  </div>
+);
+
+// ── Main Component ────────────────────────────────────────────────────────────
+export const TelemetryDashboard = () => {
+  const telemetry = useTelemetry();
+
+  return (
+    <motion.div
+      initial={{ opacity: 0, x: -50 }}
+      animate={{ opacity: 1, x: 0 }}
+      transition={{ duration: 0.8, ease: 'easeOut' }}
+      className="absolute top-8 left-8 w-80 max-h-[calc(100vh-200px)] z-10 pointer-events-auto"
+    >
+      {/* Signal Lost Overlay */}
+      <AnimatePresence>
+        {!telemetry.isLive && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="absolute inset-0 bg-red-950/80 backdrop-blur-xs z-20 flex flex-col items-center justify-center rounded-xl"
+          >
+            <WifiOff size={32} className="text-nasa-red mb-3 animate-pulse" />
+            <h3 className="text-nasa-red font-bold tracking-widest text-lg uppercase glow-text-red">Signal Lost</h3>
+            <p className="text-nasa-red/80 text-[10px] mt-1 tracking-widest uppercase font-mono">Telemetry Stale</p>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      {/* Header */}
+      <div className="flex justify-between items-center border-b border-white/10 pb-3 mb-4">
+        <div>
+          <h2 className="text-white font-bold tracking-widest text-base uppercase">Orion Telemetry</h2>
+          <p className="text-gray-600 text-[10px] tracking-widest">ARTEMIS II / MISSION CONTROL</p>
+        </div>
+        <HealthBadge health={telemetry.telemetryHealth} />
+      </div>
+
+      {/* Stats */}
+      <div className="space-y-5">
+        <StatRow icon={<Navigation size={14} />} label="Mission Phase">
+          <AnimatePresence mode="wait">
+            <motion.span
+              key={telemetry.phase}
+              initial={{ opacity: 0, y: 6 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: -6 }}
+              className="text-sm font-semibold text-nasa-blue"
+            >
+              {telemetry.phase}
+            </motion.span>
+          </AnimatePresence>
+        </StatRow>
+
+        <StatRow icon={null} label="Distance from Earth">
+          <AnimatedNumber value={telemetry.distanceFromEarthKm} />
+          <span className="text-sm text-gray-500 ml-1.5">km</span>
+        </StatRow>
+
+        <StatRow icon={null} label="Distance to Moon">
+          <AnimatedNumber value={telemetry.distanceToMoonKm} color="text-gray-200" />
+          <span className="text-sm text-gray-500 ml-1.5">km</span>
+        </StatRow>
+
+        <StatRow icon={<Zap size={14} />} label="Relative Velocity">
+          <AnimatedNumber value={telemetry.speedKmS} decimals={2} />
+          <span className="text-sm text-gray-500 ml-1.5">km/s</span>
+        </StatRow>
+
+        <StatRow icon={<Clock size={14} />} label="Mission Elapsed Time">
+          <AnimatedNumber value={telemetry.missionElapsedHours} decimals={2} />
+          <span className="text-sm text-gray-500 ml-1.5">hrs</span>
+        </StatRow>
+
+        <StatRow icon={<Signal size={14} />} label="Comms Latency (RT)">
+          <AnimatedNumber value={telemetry.commsLatencyMs} color="text-gray-200" />
+          <span className="text-sm text-gray-500 ml-1.5">ms</span>
+        </StatRow>
+      </div>
+
+      {/* Footer */}
+      <div className="mt-5 pt-3 border-t border-white/10 flex items-center justify-between">
+        <span className="text-[10px] text-gray-600 tracking-widest uppercase">DATA LINK: DSN</span>
+        <ConnectionBadge state={telemetry.connectionState} />
+      </div>
+    </motion.div>
+  );
+};
