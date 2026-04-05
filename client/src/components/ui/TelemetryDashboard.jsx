@@ -90,7 +90,7 @@ export const TelemetryDashboard = () => {
       initial={{ opacity: 0, x: -50 }}
       animate={{ opacity: 1, x: 0 }}
       transition={{ duration: 0.8, ease: 'easeOut' }}
-      className="absolute top-8 left-8 w-80 max-h-[calc(100vh-200px)] z-10 pointer-events-auto"
+      className="absolute top-8 left-8 w-80 max-h-[calc(100vh-200px)] overflow-y-auto scrollbar-hide z-10 pointer-events-auto"
     >
       {/* Signal Lost Overlay */}
       <AnimatePresence>

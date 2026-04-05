@@ -31,8 +31,9 @@ const EARTH_RADIUS_KM  = 6371;
 const MOON_RADIUS_KM   = 1737;
 const SPEED_OF_LIGHT   = 299792.458; // km/s
 
-// Artemis II reference launch (update when confirmed).
-const LAUNCH_DATE = new Date(process.env.ARTEMIS_LAUNCH_DATE || '2025-09-15T18:00:00.000Z');
+// Artemis II reference launch timeframe (Adjusted for April 2026 activity).
+// Setting this to ~48 hours ago so the PREDICTED model displays mid-transit data.
+const LAUNCH_DATE = new Date(process.env.ARTEMIS_LAUNCH_DATE || new Date(Date.now() - (48 * 3600 * 1000)).toISOString());
 
 // ─── Mission Phase Definitions ────────────────────────────────────────────────
 
