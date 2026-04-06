@@ -52,6 +52,7 @@ const DEFAULT_TELEMETRY = Object.freeze({
   position:               { x: 0, y: 0, z: 0 },
   moonPosition:           { x: 0, y: 0, z: 0 },
   telemetryHealth:        'DATA_LINK_FAILURE',
+  errorMessage:           null,
   dataSource:             'UNKNOWN',    // 'NASA_DSN' | 'JPL_HORIZONS' | 'PREDICTED_MODEL'
   dsnLinkActive:          false,        // true when DSN antenna is actively tracking Orion
   dsnSignalLoss:          true,
@@ -59,7 +60,7 @@ const DEFAULT_TELEMETRY = Object.freeze({
   commsLatencyMs:         0,
   connectionState:        CONNECTION_STATES.CONNECTING,
   isOcculted:             false,        // true when behind the moon
-  trajectoryVectors:      [],           // Raw JPL Vector arrays
+  trajectoryVectors:      { spacecraft: [], moon: [], generatedAt: null },
 });
 
 // ─── Contexts ─────────────────────────────────────────────────────────────────
@@ -163,7 +164,18 @@ export const TelemetryProvider = ({ children }) => {
     // ── Trajectory stream ─────────────────────────────────────────────────────
     
     socket.on('trajectory_update', (vectors) => {
-      mergeTelemetry({ trajectoryVectors: vectors });
+      if (Array.isArray(vectors)) {
+        // Backward compatibility with older server payload shape
+        mergeTelemetry({ trajectoryVectors: { spacecraft: vectors, moon: [], generatedAt: new Date().toISOString() } });
+        return;
+      }
+      mergeTelemetry({
+        trajectoryVectors: {
+          spacecraft: vectors?.spacecraft ?? [],
+          moon: vectors?.moon ?? [],
+          generatedAt: vectors?.generatedAt ?? new Date().toISOString(),
+        },
+      });
     });
 
     // ── Telemetry data ────────────────────────────────────────────────────────
@@ -174,6 +186,7 @@ export const TelemetryProvider = ({ children }) => {
           timestamp: new Date().toISOString(),
           telemetryHealth: 'DATA_LINK_FAILURE',
           dataSource: 'NONE',
+          errorMessage: 'Telemetry link unavailable',
           isLive: false,
           statusLabel: 'DATA_LINK_FAILURE',
           connectionState: CONNECTION_STATES.SYNCED,
@@ -199,13 +212,6 @@ export const TelemetryProvider = ({ children }) => {
       const isOcculted = dsnSignalLoss || geometricOcculted;
 
       setTelemetry((prev) => {
-        // Append current live vector to the path array to avoid gaps
-        let newTrajectory = prev.trajectoryVectors;
-        if (data.position && data.position.x !== 0 && newTrajectory.length > 0) {
-          // Keep array size manageable if polling endlessly
-          newTrajectory = [...newTrajectory, { x: data.position.x, y: data.position.y, z: data.position.z }];
-        }
-
         const next = {
           ...prev,
           ...data,
@@ -214,7 +220,6 @@ export const TelemetryProvider = ({ children }) => {
           statusLabel,
           connectionState: CONNECTION_STATES.SYNCED,
           isOcculted,
-          trajectoryVectors: newTrajectory
         };
         telemetryRef.current = next;
         return next;

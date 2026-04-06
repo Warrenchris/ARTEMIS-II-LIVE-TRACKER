@@ -157,6 +157,11 @@ export const TelemetryDashboard = () => {
               <WifiOff size={32} className="text-nasa-red mb-3 animate-pulse" />
               <h3 className="text-nasa-red font-bold tracking-widest text-lg uppercase glow-text-red">Signal Lost</h3>
               <p className="text-nasa-red/80 text-[10px] mt-1 tracking-widest uppercase font-mono">Telemetry Stale</p>
+              {telemetry.errorMessage && (
+                <p className="text-red-300/90 text-[10px] mt-2 px-4 text-center normal-case tracking-normal font-mono">
+                  {telemetry.errorMessage}
+                </p>
+              )}
             </motion.div>
           )}
         </AnimatePresence>

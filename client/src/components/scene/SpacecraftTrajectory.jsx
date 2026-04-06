@@ -20,12 +20,10 @@ import React, { useRef, useMemo, useEffect } from 'react';
 import { useFrame }          from '@react-three/fiber';
 import { useTelemetryRef }   from '../../contexts/TelemetryContext';
 import * as THREE            from 'three';
+import { EARTH_RADIUS_SCENE, MOON_RADIUS_SCENE, getDistanceScaleFromTelemetry, kmVectorToScene } from './layout';
 
-const SCALE = 1 / 1000;
 const CURVE_POINTS = 160;
 const UPDATE_THRESHOLD_KM = 10;
-const EARTH_R = 6.371;
-const MOON_R = 1.737;
 
 const EARTH_POS = new THREE.Vector3(0, 0, 0);
 const FAR_SIDE_PHASES = new Set(['transit', 'approach', 'loi', 'flyby']);
@@ -33,7 +31,7 @@ const FAR_SIDE_PHASES = new Set(['transit', 'approach', 'loi', 'flyby']);
 function buildFreeReturnCurve(scPos, phaseId, progress, currentMoonPos) {
   const isLunarPhase = FAR_SIDE_PHASES.has(phaseId) || progress > 0.5;
 
-  const p0 = EARTH_POS.clone().add(new THREE.Vector3(0, EARTH_R * 0.2, -(EARTH_R + 1.0)));
+  const p0 = EARTH_POS.clone().add(new THREE.Vector3(0, EARTH_RADIUS_SCENE * 0.2, -(EARTH_RADIUS_SCENE + 1.0)));
 
   const t1   = Math.max(0.1, progress * 0.35);
   const lift1 = 28 * Math.sin(Math.PI * t1 * 2);
@@ -65,9 +63,9 @@ function buildFreeReturnCurve(scPos, phaseId, progress, currentMoonPos) {
   }
 
   const toMoon     = currentMoonPos.clone().sub(p3).normalize();
-  const sideOffset = new THREE.Vector3(MOON_R + 0.5, 0, 0); 
+  const sideOffset = new THREE.Vector3(MOON_RADIUS_SCENE + 0.5, 0, 0); 
   const p4         = currentMoonPos.clone()
-    .add(toMoon.clone().multiplyScalar(-(MOON_R + 0.4)))
+    .add(toMoon.clone().multiplyScalar(-(MOON_RADIUS_SCENE + 0.4)))
     .add(sideOffset);
 
   const curve = new THREE.CatmullRomCurve3([p0, p1, p2, p3, p4], false, 'catmullrom', 0.5);
@@ -98,6 +96,17 @@ function fillBuffer(buf, curve, tStart, tEnd, count) {
     buf[i * 3 + 1] = tmp.y;
     buf[i * 3 + 2] = tmp.z;
   }
+}
+
+function fillBufferFromVectors(buf, vectors, count, distanceScale) {
+  const n = Math.min(count, vectors.length);
+  for (let i = 0; i < n; i++) {
+    const p = kmVectorToScene(vectors[i], distanceScale);
+    buf[i * 3] = p.x;
+    buf[i * 3 + 1] = p.y;
+    buf[i * 3 + 2] = p.z;
+  }
+  return n;
 }
 
 function makeFlowMaterial() {
@@ -219,11 +228,13 @@ export const SpacecraftTrajectory = () => {
   useFrame((state) => {
     const tel = telemetryRef.current;
     if (!tel) return;
+    const distanceScale = getDistanceScaleFromTelemetry(tel);
 
     const earthDistKm = parseFloat(tel.distanceFromEarthKm) || 0;
     const moonDistKm  = parseFloat(tel.distanceToMoonKm)    || 384400;
     const phaseId     = tel.phaseId || 'launch';
-    const trajectoryCount = Array.isArray(tel.trajectoryVectors) ? tel.trajectoryVectors.length : 0;
+    const trajectoryVectors = tel?.trajectoryVectors?.spacecraft ?? [];
+    const trajectoryCount = Array.isArray(trajectoryVectors) ? trajectoryVectors.length : 0;
 
     if (flowMatRef.current) {
       flowMatRef.current.uniforms.uTime.value = state.clock.elapsedTime;
@@ -238,32 +249,35 @@ export const SpacecraftTrajectory = () => {
     lastTrajectoryCountRef.current = trajectoryCount;
     lastEarthDistRef.current = earthDistKm;
 
-    let scPos = new THREE.Vector3(
-      (tel.position?.x || 0) * SCALE,
-      (tel.position?.y || 0) * SCALE,
-      (tel.position?.z || 0) * SCALE
+    let scPos = kmVectorToScene(
+      {
+        x: tel.position?.x || 0,
+        y: tel.position?.y || 0,
+        z: tel.position?.z || 0,
+      },
+      distanceScale
     );
 
     const moonPosData = tel.moonPosition;
     let currentMoonNode = null;
     if (moonPosData && (moonPosData.x !== 0 || moonPosData.y !== 0 || moonPosData.z !== 0)) {
       currentMoonNode = new THREE.Vector3(
-        moonPosData.x * SCALE,
-        moonPosData.y * SCALE,
-        moonPosData.z * SCALE
+        moonPosData.x * distanceScale,
+        0,
+        moonPosData.z * distanceScale
       );
     }
 
     // Force geometric tracing (fallback if backend 0,0,-Z static states are still live)
     if (Math.abs(scPos.x) < 0.1 && Math.abs(scPos.y) < 0.1 && scPos.z < 0) {
-      const fallbackMoon = currentMoonNode ?? new THREE.Vector3(moonDistKm * SCALE, 0, 0);
+      const fallbackMoon = currentMoonNode ?? new THREE.Vector3(moonDistKm * distanceScale, 0, 0);
       const t  = Math.min(1, earthDistKm / (earthDistKm + moonDistKm));
       scPos = EARTH_POS.clone().lerp(fallbackMoon, t);
     }
 
     if (!currentMoonNode) {
       const dir = scPos.lengthSq() > 0 ? scPos.clone().normalize() : new THREE.Vector3(1, 0, 0);
-      currentMoonNode = dir.multiplyScalar((earthDistKm + moonDistKm) * SCALE);
+      currentMoonNode = dir.multiplyScalar((earthDistKm + moonDistKm) * distanceScale);
     }
 
     const total    = earthDistKm + moonDistKm;
@@ -271,20 +285,17 @@ export const SpacecraftTrajectory = () => {
 
     let curve;
     let hasLiveTrajectoryVectors = false;
-    if (tel.trajectoryVectors && tel.trajectoryVectors.length >= 2) {
-      // Pure JPL Physics trajectory!
-      const vectors = tel.trajectoryVectors.map(v => new THREE.Vector3(v.x * SCALE, v.y * SCALE, v.z * SCALE));
-      curve = new THREE.CatmullRomCurve3(vectors, false, 'catmullrom');
+    if (trajectoryVectors && trajectoryVectors.length >= 4) {
       hasLiveTrajectoryVectors = true;
     } else {
       // Fallback Algorithm
       curve = buildFreeReturnCurve(scPos, phaseId, progress, currentMoonNode);
     }
 
-    const scT = findCurveT(curve, scPos);
+    const scT = hasLiveTrajectoryVectors ? 0 : findCurveT(curve, scPos);
 
-    let numTravelled = Math.max(2, Math.round(scT * CURVE_POINTS));
-    let numPlanned = Math.max(2, Math.round((1 - scT) * CURVE_POINTS));
+    let numTravelled = hasLiveTrajectoryVectors ? 0 : Math.max(2, Math.round(scT * CURVE_POINTS));
+    let numPlanned = hasLiveTrajectoryVectors ? 0 : Math.max(2, Math.round((1 - scT) * CURVE_POINTS));
     let travelledStartT = 0;
     let travelledEndT = scT;
     let plannedStartT = scT;
@@ -292,16 +303,21 @@ export const SpacecraftTrajectory = () => {
 
     // For live JPL vectors, render the full path so trajectory is always visible.
     if (hasLiveTrajectoryVectors) {
-      numTravelled = 2;
-      numPlanned = CURVE_POINTS;
-      travelledStartT = 0;
-      travelledEndT = 0.001;
-      plannedStartT = 0;
-      plannedEndT = 1;
-    }
+      const nowMs = Date.now();
+      const past = trajectoryVectors.filter((v) => new Date(v.timestamp).getTime() <= nowMs);
+      const future = trajectoryVectors.filter((v) => new Date(v.timestamp).getTime() > nowMs);
+      const earthDeparture = { x: 0, y: 0, z: -EARTH_RADIUS_SCENE / distanceScale };
+      const anchoredPast = past.length > 0 ? [earthDeparture, ...past] : [earthDeparture];
+      const anchoredFuture = future.length > 0 ? future : [trajectoryVectors[trajectoryVectors.length - 1]];
 
-    fillBuffer(travelledBuf.current, curve, travelledStartT, travelledEndT, numTravelled);
-    fillBuffer(plannedBuf.current, curve, plannedStartT, plannedEndT, numPlanned);
+      numTravelled = fillBufferFromVectors(travelledBuf.current, anchoredPast, maxPts, distanceScale);
+      numPlanned = fillBufferFromVectors(plannedBuf.current, anchoredFuture, maxPts, distanceScale);
+      if (numTravelled < 2) numTravelled = Math.min(2, fillBufferFromVectors(travelledBuf.current, trajectoryVectors, maxPts, distanceScale));
+      if (numPlanned < 2) numPlanned = Math.min(2, fillBufferFromVectors(plannedBuf.current, trajectoryVectors.slice(-maxPts), maxPts, distanceScale));
+    } else {
+      fillBuffer(travelledBuf.current, curve, travelledStartT, travelledEndT, numTravelled);
+      fillBuffer(plannedBuf.current, curve, plannedStartT, plannedEndT, numPlanned);
+    }
 
     {
       const buf = travelledDistBuf.current;

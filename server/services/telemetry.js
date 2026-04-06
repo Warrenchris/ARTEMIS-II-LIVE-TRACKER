@@ -49,7 +49,7 @@ const logger = require('../utils/logger');
 
 const POLL_INTERVAL_MS = Math.max(
   5_000,
-  parseInt(process.env.TELEMETRY_POLL_INTERVAL_MS, 10) || 10_000
+  parseInt(process.env.TELEMETRY_POLL_INTERVAL_MS, 10) || 30_000
 );
 
 const SPEED_OF_LIGHT = 299_792.458; // km/s
@@ -143,8 +143,8 @@ function normalise(
 
   return {
     timestamp:             new Date().toISOString(),
-    missionElapsedHours:   null,
-    flightDay:             null,
+    missionElapsedHours:   missionElapsedHours().toFixed(2),
+    flightDay:             Math.max(1, Math.ceil(missionElapsedHours() / 24)),
     distanceFromEarthKm:   safeEarth.toFixed(0),
     distanceToMoonKm:      safeMoon.toFixed(0),
     speedKmS:              speedKmS.toFixed(3),
@@ -692,67 +692,97 @@ function buildPredicted(dsnLinkActive = false) {
 
 // ─── Phase 1: Trajectory Vector Bulk Array ────────────────────────────────────
 
-let cachedTrajectory = [];
+let cachedTrajectory = null;
 let lastTrajectoryFetch = 0;
+
+function parseHorizonsVectorSeries(rawBody) {
+  const body = typeof rawBody === 'object'
+    ? (rawBody?.result ?? JSON.stringify(rawBody))
+    : String(rawBody || '');
+  const soeIdx = body.indexOf('$$SOE');
+  const eoeIdx = body.indexOf('$$EOE');
+  if (soeIdx === -1 || eoeIdx === -1) return [];
+
+  const section = body.slice(soeIdx + 5, eoeIdx).trim();
+  const blockRegex =
+    /A\.D\.\s+([0-9A-Za-z\-:\. ]+?)\s+TDB[\s\S]*?X\s*=\s*([-+]?\d+(?:\.\d+)?(?:[eE][-+]?\d+)?)\s+Y\s*=\s*([-+]?\d+(?:\.\d+)?(?:[eE][-+]?\d+)?)\s+Z\s*=\s*([-+]?\d+(?:\.\d+)?(?:[eE][-+]?\d+)?)/g;
+
+  const monthMap = {
+    Jan: '01', Feb: '02', Mar: '03', Apr: '04', May: '05', Jun: '06',
+    Jul: '07', Aug: '08', Sep: '09', Oct: '10', Nov: '11', Dec: '12',
+  };
+
+  const vectors = [];
+  let match;
+  while ((match = blockRegex.exec(section)) !== null) {
+    const cleaned = match[1].replace(/\s+/g, ' ').trim();
+    const tsMatch = cleaned.match(/^(\d{4})-([A-Za-z]{3})-(\d{2})\s+(\d{2}:\d{2}:\d{2})(?:\.\d+)?$/);
+    const fallbackDate = new Date(cleaned);
+    const isoTimestamp = tsMatch
+      ? `${tsMatch[1]}-${monthMap[tsMatch[2]] || '01'}-${tsMatch[3]}T${tsMatch[4]}Z`
+      : (Number.isNaN(fallbackDate.getTime()) ? new Date().toISOString() : fallbackDate.toISOString());
+    vectors.push({
+      timestamp: isoTimestamp,
+      x: parseFloat(match[2]),
+      y: parseFloat(match[3]),
+      z: parseFloat(match[4]),
+    });
+  }
+  return vectors;
+}
 
 async function updateTrajectoryCache() {
   const nowTime = Date.now();
-  if (cachedTrajectory.length > 0 && (nowTime - lastTrajectoryFetch < 3600_000)) {
+  if (cachedTrajectory && (nowTime - lastTrajectoryFetch < 3600_000)) {
     return cachedTrajectory; // cache valid for 1 hour
   }
 
   try {
-    const now   = new Date();
-    const start = new Date(now.getTime() - 24 * 3600_000);  // -24 hours
-    const stop  = new Date(now.getTime() + 48 * 3600_000);  // +48 hours
-    
-    const params = {
-      format:     'text',
-      COMMAND:    horizonsLiteral('-1024'),
+    // Full mission profile window so the plotted path clearly starts at Earth,
+    // reaches lunar flyby, and returns toward Earth.
+    const launchEpoch = new Date('2026-04-01T18:00:00Z');
+    const start = launchEpoch;
+    const stop  = new Date(launchEpoch.getTime() + 240 * 3600_000); // ~10 day mission
+    const paramsFor = (command) => ({
+      format: 'text',
+      COMMAND: horizonsLiteral(command),
       MAKE_EPHEM: horizonsLiteral('YES'),
-      OBJ_DATA:   horizonsLiteral('NO'),
+      OBJ_DATA: horizonsLiteral('NO'),
       EPHEM_TYPE: horizonsLiteral('VECTORS'),
-      CENTER:     horizonsLiteral('500@399'),
+      CENTER: horizonsLiteral('500@399'),
       START_TIME: horizonsLiteral(toHorizonsDateTime(start)),
-      STOP_TIME:  horizonsLiteral(toHorizonsDateTime(stop)),
-      STEP_SIZE:  horizonsLiteral('1 h'),
-      OUT_UNITS:  horizonsLiteral('KM-S'),
-      REF_PLANE:  horizonsLiteral('ECLIPTIC'),
+      STOP_TIME: horizonsLiteral(toHorizonsDateTime(stop)),
+      STEP_SIZE: horizonsLiteral('1 h'),
+      OUT_UNITS: horizonsLiteral('KM-S'),
+      REF_PLANE: horizonsLiteral('ECLIPTIC'),
       REF_SYSTEM: horizonsLiteral('J2000'),
-    };
+    });
 
-    const response = await axios.get(HORIZONS_BASE, { params, headers: COMMON_HEADERS, timeout: REQUEST_TIMEOUT });
-    const body = typeof response.data === 'object' ? (response.data?.result ?? JSON.stringify(response.data)) : String(response.data);
-    
-    const soeIdx = body.indexOf('$$SOE');
-    const eoeIdx = body.indexOf('$$EOE');
-    if (soeIdx !== -1 && eoeIdx !== -1) {
-      const tableText = body.slice(soeIdx + 5, eoeIdx).trim();
-      const lines = tableText.split('\n').map((line) => line.trim()).filter(Boolean);
-      const parsedVectors = [];
-      for (const line of lines) {
-        const posMatch = line.match(
-          /X\s*=\s*([-+]?\d+(?:\.\d+)?(?:[eE][-+]?\d+)?)\s+Y\s*=\s*([-+]?\d+(?:\.\d+)?(?:[eE][-+]?\d+)?)\s+Z\s*=\s*([-+]?\d+(?:\.\d+)?(?:[eE][-+]?\d+)?)/i
-        );
-        if (posMatch) {
-          const x = parseFloat(posMatch[1]);
-          const y = parseFloat(posMatch[2]);
-          const z = parseFloat(posMatch[3]);
-          parsedVectors.push({ x, y, z });
-        }
-      }
-      
-      if (parsedVectors.length > 0) {
-        cachedTrajectory = parsedVectors;
-        lastTrajectoryFetch = nowTime;
-        logger.info(`Refreshed JPL Trajectory Array: ${cachedTrajectory.length} hourly vectors cached.`);
-      }
+    const [spacecraftResp, moonResp] = await Promise.all([
+      axios.get(HORIZONS_BASE, { params: paramsFor('-1024'), headers: COMMON_HEADERS, timeout: REQUEST_TIMEOUT }),
+      axios.get(HORIZONS_BASE, { params: paramsFor('301'), headers: COMMON_HEADERS, timeout: REQUEST_TIMEOUT }),
+    ]);
+
+    const spacecraft = parseHorizonsVectorSeries(spacecraftResp.data);
+    const moon = parseHorizonsVectorSeries(moonResp.data);
+
+    if (spacecraft.length > 0 && moon.length > 0) {
+      cachedTrajectory = {
+        generatedAt: new Date().toISOString(),
+        spacecraft,
+        moon,
+      };
+      lastTrajectoryFetch = nowTime;
+      logger.info('Refreshed JPL trajectory caches', {
+        spacecraftVectors: spacecraft.length,
+        moonVectors: moon.length,
+      });
     }
   } catch (err) {
     logger.warn('Failed to bulk fetch JPL Trajectory Vectors', { error: err.message });
   }
 
-  return cachedTrajectory;
+  return cachedTrajectory || { generatedAt: new Date().toISOString(), spacecraft: [], moon: [] };
 }
 
 // ─── Shared fetch state ───────────────────────────────────────────────────────
@@ -768,7 +798,7 @@ const trendState = {
 
 /**
  * Live-only telemetry orchestrator.
- * If live fetch fails, returns null and lets clients render link failure state.
+ * If live fetch fails, returns an explicit degraded payload for graceful UI fallback.
  */
 async function fetchBestTelemetry() {
   let dsnLinkActive = false;
@@ -798,8 +828,27 @@ async function fetchBestTelemetry() {
     logger.warn('Live telemetry unavailable — DATA_LINK_FAILURE', {
       error: horizonsErr.message,
     });
+    return {
+      timestamp: new Date().toISOString(),
+      telemetryHealth: 'DATA_LINK_FAILURE',
+      dataSource: 'NONE',
+      errorMessage: horizonsErr.message,
+      dsnLinkActive,
+      dsnSignalLoss: true,
+      position: { x: 0, y: 0, z: 0 },
+      moonPosition: { x: 0, y: 0, z: 0 },
+    };
   }
-  return null;
+  return {
+    timestamp: new Date().toISOString(),
+    telemetryHealth: 'DATA_LINK_FAILURE',
+    dataSource: 'NONE',
+    errorMessage: 'Telemetry link unavailable',
+    dsnLinkActive,
+    dsnSignalLoss: true,
+    position: { x: 0, y: 0, z: 0 },
+    moonPosition: { x: 0, y: 0, z: 0 },
+  };
 }
 
 // ─── Internal state ───────────────────────────────────────────────────────────
@@ -811,7 +860,7 @@ let intervalHandle = null;
 async function runPollCycle(io) {
   try {
     const trajectory = await updateTrajectoryCache();
-    if (trajectory.length > 0) {
+    if (trajectory.spacecraft.length > 0 || trajectory.moon.length > 0) {
       io.emit('trajectory_update', trajectory);
     }
 

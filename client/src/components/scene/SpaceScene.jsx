@@ -54,7 +54,7 @@ export const SpaceScene = () => {
       <ErrorBoundary>
         <Canvas
           shadows
-          camera={{ position: [60, 25, 80], fov: 42, near: 0.1, far: 2000 }}
+          camera={{ position: [0, 85, 245], fov: 38, near: 0.1, far: 3000 }}
           gl={{ antialias: true, alpha: false, powerPreference: 'high-performance' }}
           dpr={[1, 1.5]}           // max pixel ratio 1.5 for balance of quality/perf
           onCreated={handleCreated}

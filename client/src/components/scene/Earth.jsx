@@ -2,6 +2,7 @@ import React, { useRef, useMemo } from 'react';
 import { useFrame } from '@react-three/fiber';
 import { useTexture } from '@react-three/drei';
 import * as THREE from 'three';
+import { EARTH_RADIUS_SCENE } from './layout';
 
 // High-quality free textures from Solar System Scope (CC-BY license)
 const EARTH_TEXTURE_URL    = 'https://raw.githubusercontent.com/mrdoob/three.js/dev/examples/textures/planets/earth_atmos_2048.jpg';
@@ -28,7 +29,7 @@ export const Earth = React.memo(() => {
     <group>
       {/* Earth surface */}
       <mesh ref={earthRef} position={[0, 0, 0]}>
-        <sphereGeometry args={[6.371, 48, 48]} />
+        <sphereGeometry args={[EARTH_RADIUS_SCENE, 64, 64]} />
         <meshPhongMaterial
           map={colorMap}
           normalMap={normalMap}
@@ -40,7 +41,7 @@ export const Earth = React.memo(() => {
 
       {/* Atmospheric glow shell */}
       <mesh ref={atmoRef} position={[0, 0, 0]}>
-        <sphereGeometry args={[6.55, 48, 48]} />
+        <sphereGeometry args={[EARTH_RADIUS_SCENE * 1.03, 64, 64]} />
         <meshBasicMaterial
           color="#4db8ff"
           transparent
@@ -52,7 +53,7 @@ export const Earth = React.memo(() => {
 
       {/* Outer atmospheric haze */}
       <mesh position={[0, 0, 0]}>
-        <sphereGeometry args={[6.72, 32, 32]} />
+        <sphereGeometry args={[EARTH_RADIUS_SCENE * 1.055, 32, 32]} />
         <meshBasicMaterial
           color="#1a6bac"
           transparent

@@ -4,9 +4,7 @@ import { OrbitControls } from '@react-three/drei';
 import * as THREE from 'three';
 import { useCameraContext } from '../../contexts/CameraContext';
 import { useTelemetryRef } from '../../contexts/TelemetryContext';
-import { getMoonPositionAtTime } from './MoonOrbit';
-
-const SCALE = 1 / 1000;
+import { getDistanceScaleFromTelemetry, kmVectorToScene } from './layout';
 
 export const CameraController = () => {
   const controlsRef = useRef();
@@ -22,22 +20,21 @@ export const CameraController = () => {
     if (!controlsRef.current) return;
     const ctrl = controlsRef.current;
 
+    const distanceScale = getDistanceScaleFromTelemetry(telemetryRef.current);
+
     // 1. Determine where we want the target to be this frame
     if (focusTarget === 'earth') {
       tempVec.copy(earthVec);
     } else if (focusTarget === 'moon') {
-      const tel = telemetryRef.current;
-      const metH = parseFloat(tel?.missionElapsedHours) || 0;
-      tempVec.copy(getMoonPositionAtTime(metH));
+      const moon = telemetryRef.current?.moonPosition;
+      if (moon && Number.isFinite(moon.x) && Number.isFinite(moon.y) && Number.isFinite(moon.z)) {
+        tempVec.copy(kmVectorToScene(moon, distanceScale));
+      }
     } else if (focusTarget === 'spacecraft') {
-      const tel = telemetryRef.current;
-      const metH = parseFloat(tel?.missionElapsedHours) || 0;
-      const earthDistKm = parseFloat(tel?.distanceFromEarthKm) || 0;
-      const moonDistKm  = parseFloat(tel?.distanceToMoonKm)    || 384400;
-      
-      const currentMoonNode = getMoonPositionAtTime(metH);
-      const t  = Math.min(1, earthDistKm / (earthDistKm + moonDistKm));
-      tempVec.copy(earthVec).lerp(currentMoonNode, t);
+      const pos = telemetryRef.current?.position;
+      if (pos && Number.isFinite(pos.x) && Number.isFinite(pos.y) && Number.isFinite(pos.z)) {
+        tempVec.copy(kmVectorToScene(pos, distanceScale));
+      }
     }
 
     // 2. Smoothly lerp the OrbitControls target to the desired tempVec position
@@ -55,7 +52,10 @@ export const CameraController = () => {
       enableZoom={true}
       enableRotate={true}
       maxDistance={1000} // Large enough for Moon view
-      minDistance={1.2}  // Close enough for Spacecraft view
+      minDistance={2.5}
+      target={[0, 0, 0]}
+      maxPolarAngle={Math.PI * 0.92}
+      minPolarAngle={Math.PI * 0.08}
       zoomSpeed={0.7}
       rotateSpeed={0.5}
       panSpeed={0.5}

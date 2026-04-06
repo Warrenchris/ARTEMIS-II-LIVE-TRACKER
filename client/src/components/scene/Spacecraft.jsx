@@ -3,10 +3,8 @@ import { useFrame } from '@react-three/fiber';
 import { Html } from '@react-three/drei';
 import { useTelemetryRef } from '../../contexts/TelemetryContext';
 import * as THREE from 'three';
-import { MOON_SCENE_POSITION } from './Moon';
-import { getMoonPositionAtTime } from './MoonOrbit';
+import { getDistanceScaleFromTelemetry, kmVectorToScene } from './layout';
 
-const SCALE   = 1 / 1000;    // km → scene units
 const EPSILON = 0.0005;       // skip lerp below this positional delta
 
 export const Spacecraft = () => {
@@ -19,17 +17,11 @@ export const Spacecraft = () => {
 
   useFrame((state, delta) => {
     const tel = telemetryRef.current;
-    
-    // Override raw backend coordinates, position craft analytically along the earth-moon axis bound to live distances
-    const metH = parseFloat(tel?.missionElapsedHours) || 0;
-    const earthDistKm = parseFloat(tel?.distanceFromEarthKm) || 0;
-    const moonDistKm  = parseFloat(tel?.distanceToMoonKm) || 384400;
-    const currentMoonNode = getMoonPositionAtTime(metH);
-    
-    const tScale = Math.min(1, earthDistKm / (earthDistKm + moonDistKm));
-    const calculatedPos = new THREE.Vector3(0, 0, 0).lerp(currentMoonNode, tScale);
-    
-    targetPos.current.copy(calculatedPos);
+    const distanceScale = getDistanceScaleFromTelemetry(tel);
+    const p = tel?.position;
+    if (p && Number.isFinite(p.x) && Number.isFinite(p.y) && Number.isFinite(p.z)) {
+      targetPos.current.copy(kmVectorToScene(p, distanceScale));
+    }
 
     const g = groupRef.current;
     if (!g) return;
@@ -40,8 +32,10 @@ export const Spacecraft = () => {
       g.position.lerp(targetPos.current, Math.min(1, delta * 2));
     }
 
-    // Orient towards dynamic Moon position
-    g.lookAt(currentMoonNode);
+    const moon = tel?.moonPosition;
+    if (moon && Number.isFinite(moon.x) && Number.isFinite(moon.y) && Number.isFinite(moon.z)) {
+      g.lookAt(kmVectorToScene(moon, distanceScale));
+    }
 
     // Engine glow pulse
     if (glowRef.current) {
@@ -52,7 +46,7 @@ export const Spacecraft = () => {
   });
 
   return (
-    <group ref={groupRef} position={[0, 0, -10]} scale={0.08}>
+    <group ref={groupRef} position={[0, 0, 0]} scale={0.08}>
       {/* ── Service Module (cylinder) ── */}
       <mesh position={[0, -0.6, 0]} castShadow receiveShadow>
         <cylinderGeometry args={[0.35, 0.4, 0.9, 16]} />
