@@ -195,10 +195,9 @@ export const TelemetryProvider = ({ children }) => {
       // ── Physics Override Heuristics ──
       let speedStr = data.speedKmS;
       const moonDist = parseFloat(data.distanceToMoonKm) || 0;
-      const earthDist = parseFloat(data.distanceFromEarthKm) || 0;
-      
-      // Calculate geometric occultation (behind moon line-of-sight from Earth) OR DSN explicit drop
-      const isOcculted = (!data.dsnLinkActive) || (earthDist > 384400 && moonDist < 15000);
+      // Calculate geometric occultation (behind moon line-of-sight from Earth)
+      // Restricted purely to physics-math threshold so live telemetry flows normally until the eclipse is geometrically true.
+      const isOcculted = (earthDist > 384400 && moonDist < 15000);
 
       // Quadratic velocity curve boosting towards 2.1 near periapsis
       if (moonDist < 40000 && moonDist > 0) {

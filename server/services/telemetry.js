@@ -362,6 +362,12 @@ async function fetchFromDSN(state) {
   }
 
   dsnActive = activeDown || activeUp;
+  // If the target is in the XML but the link is physically inactive, the data is just
+  // cached/stale dummy strings (e.g. exactly 387000 km) and won't update natively.
+  // We throw an error to immediately yield priority to the high-precision JPL Horizons feed.
+  if (!dsnActive) {
+    throw new Error('DSN XML: EM2 target found but uplink/downlink inactive. Yielding to JPL Horizons.');
+  }
 
   // ── Derive speed from range delta ──────────────────────────────────────
   let speedKmS = null;

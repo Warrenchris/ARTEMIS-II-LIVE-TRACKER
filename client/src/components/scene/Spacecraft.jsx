@@ -54,7 +54,7 @@ export const Spacecraft = () => {
   return (
     <group ref={groupRef} position={[0, 0, -10]} scale={0.08}>
       {/* ── Service Module (cylinder) ── */}
-      <mesh position={[0, -0.6, 0]}>
+      <mesh position={[0, -0.6, 0]} castShadow receiveShadow>
         <cylinderGeometry args={[0.35, 0.4, 0.9, 16]} />
         <meshStandardMaterial
           color="#888899"
@@ -64,7 +64,7 @@ export const Spacecraft = () => {
       </mesh>
 
       {/* ── Crew Module (capsule cone) ── */}
-      <mesh position={[0, 0.35, 0]}>
+      <mesh position={[0, 0.35, 0]} castShadow receiveShadow>
         <coneGeometry args={[0.35, 0.85, 16]} />
         <meshStandardMaterial
           color="#c8c8d8"
@@ -74,17 +74,17 @@ export const Spacecraft = () => {
       </mesh>
 
       {/* ── Solar Arrays (flat boxes) ── */}
-      <mesh position={[1.1, -0.6, 0]} rotation={[0, 0, Math.PI / 2]}>
+      <mesh position={[1.1, -0.6, 0]} rotation={[0, 0, Math.PI / 2]} castShadow receiveShadow>
         <boxGeometry args={[0.04, 1.6, 0.7]} />
         <meshStandardMaterial color="#1a2a5a" roughness={0.5} metalness={0.3} />
       </mesh>
-      <mesh position={[-1.1, -0.6, 0]} rotation={[0, 0, Math.PI / 2]}>
+      <mesh position={[-1.1, -0.6, 0]} rotation={[0, 0, Math.PI / 2]} castShadow receiveShadow>
         <boxGeometry args={[0.04, 1.6, 0.7]} />
         <meshStandardMaterial color="#1a2a5a" roughness={0.5} metalness={0.3} />
       </mesh>
 
       {/* ── Engine Nozzle ── */}
-      <mesh position={[0, -1.15, 0]} rotation={[Math.PI, 0, 0]}>
+      <mesh position={[0, -1.15, 0]} rotation={[Math.PI, 0, 0]} castShadow receiveShadow>
         <coneGeometry args={[0.22, 0.35, 12]} />
         <meshStandardMaterial color="#555566" roughness={0.6} metalness={0.9} />
       </mesh>

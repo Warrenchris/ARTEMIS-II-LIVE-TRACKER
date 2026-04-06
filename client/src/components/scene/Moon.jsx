@@ -32,7 +32,7 @@ export const Moon = React.memo(() => {
   });
 
   return (
-    <mesh ref={moonRef} position={MOON_SCENE_POSITION}>
+    <mesh ref={moonRef} position={MOON_SCENE_POSITION} castShadow receiveShadow>
       <sphereGeometry args={[1.737, 48, 48]} />
       <meshStandardMaterial
         map={colorMap}
