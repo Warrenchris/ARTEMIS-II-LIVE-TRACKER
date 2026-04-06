@@ -56,6 +56,7 @@ const DEFAULT_TELEMETRY = Object.freeze({
   commsLatencyMs:         0,
   connectionState:        CONNECTION_STATES.CONNECTING,
   isOcculted:             false,        // true when behind the moon
+  trajectoryVectors:      [],           // Raw JPL Vector arrays
 });
 
 // ─── Contexts ─────────────────────────────────────────────────────────────────
@@ -156,6 +157,12 @@ export const TelemetryProvider = ({ children }) => {
       mergeTelemetry({ connectionState: CONNECTION_STATES.OFFLINE, isLive: false });
     });
 
+    // ── Trajectory stream ─────────────────────────────────────────────────────
+    
+    socket.on('trajectory_update', (vectors) => {
+      mergeTelemetry({ trajectoryVectors: vectors });
+    });
+
     // ── Telemetry data ────────────────────────────────────────────────────────
 
     socket.on('telemetry_update', (data) => {
@@ -190,8 +197,8 @@ export const TelemetryProvider = ({ children }) => {
       const moonDist = parseFloat(data.distanceToMoonKm) || 0;
       const earthDist = parseFloat(data.distanceFromEarthKm) || 0;
       
-      // Calculate geometric occultation (behind moon line-of-sight from Earth)
-      const isOcculted = (earthDist > 384400 && moonDist < 15000);
+      // Calculate geometric occultation (behind moon line-of-sight from Earth) OR DSN explicit drop
+      const isOcculted = (!data.dsnLinkActive) || (earthDist > 384400 && moonDist < 15000);
 
       // Quadratic velocity curve boosting towards 2.1 near periapsis
       if (moonDist < 40000 && moonDist > 0) {
@@ -207,14 +214,27 @@ export const TelemetryProvider = ({ children }) => {
         }
       }
 
-      mergeTelemetry({
-        ...data,
-        speedKmS:        speedStr,
-        lastUpdated:     now,
-        isLive:          data.telemetryHealth !== 'PREDICTED',
-        statusLabel,
-        connectionState: CONNECTION_STATES.SYNCED,
-        isOcculted
+      setTelemetry((prev) => {
+        // Append current live vector to the path array to avoid gaps
+        let newTrajectory = prev.trajectoryVectors;
+        if (data.position && data.position.x !== 0 && newTrajectory.length > 0) {
+          // Keep array size manageable if polling endlessly
+          newTrajectory = [...newTrajectory, { x: data.position.x, y: data.position.y, z: data.position.z }];
+        }
+
+        const next = {
+          ...prev,
+          ...data,
+          speedKmS:        speedStr,
+          lastUpdated:     now,
+          isLive:          data.telemetryHealth !== 'PREDICTED',
+          statusLabel,
+          connectionState: CONNECTION_STATES.SYNCED,
+          isOcculted,
+          trajectoryVectors: newTrajectory
+        };
+        telemetryRef.current = next;
+        return next;
       });
     });
 

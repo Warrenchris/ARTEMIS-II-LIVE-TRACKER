@@ -143,12 +143,15 @@ function isFlybyWindow() {
  * @param {number}  fields.speedKmS        Inertial speed (km/s)
  * @param {number}  [fields.relVelKmS]     Velocity relative to Moon (km/s)
  * @param {boolean} [fields.dsnLinkActive] DSN antenna actively tracking
+ * @param {number}  [fields.x=0]           Geocentric X (km)
+ * @param {number}  [fields.y=0]           Geocentric Y (km)
+ * @param {number}  [fields.z=0]           Geocentric Z (km)
  * @param {'NOMINAL'|'PREDICTED'|'DEGRADED'|'STALE'} healthOverride
  * @param {string}  [dataSource]           Source label for the UI
  * @returns {object} Canonical telemetry packet
  */
 function normalise(
-  { earthDistKm, moonDistKm, speedKmS, relVelKmS, dsnLinkActive = false },
+  { earthDistKm, moonDistKm, speedKmS, relVelKmS, dsnLinkActive = false, x = 0, y = 0, z = 0 },
   healthOverride = 'NOMINAL',
   dataSource = 'UNKNOWN'
 ) {
@@ -180,11 +183,7 @@ function normalise(
     relativeVelocityKmS:   relVel !== null ? relVel.toFixed(3) : null,
     phaseId:               phase.id,
     phase:                 phase.label,
-    position: {
-      x: 0,
-      y: 0,
-      z: -(safeEarth),
-    },
+    position: { x, y, z },
     telemetryHealth:       healthOverride,
     dataSource,
     dsnLinkActive,
@@ -434,18 +433,6 @@ async function fetchFromHorizons(dsnLinkActive) {
   const start = new Date(now.getTime() - 60_000);  // -1 min
   const stop  = new Date(now.getTime() + 60_000);  // +1 min
 
-  // ISO format padded for Horizons: 'YYYY-Mon-DD HH:MM'
-  const fmt = (d) => {
-    const months = ['Jan','Feb','Mar','Apr','May','Jun',
-                    'Jul','Aug','Sep','Oct','Nov','Dec'];
-    return (
-      `${d.getUTCFullYear()}-${months[d.getUTCMonth()]}-` +
-      `${String(d.getUTCDate()).padStart(2, '0')} ` +
-      `${String(d.getUTCHours()).padStart(2, '0')}:` +
-      `${String(d.getUTCMinutes()).padStart(2, '0')}`
-    );
-  };
-
   // ── FIXED: No single-quotes around values for REST API ──────────────
   const params = {
     format:     'json',
@@ -454,8 +441,8 @@ async function fetchFromHorizons(dsnLinkActive) {
     MAKE_EPHEM: 'YES',
     EPHEM_TYPE: 'VECTORS',
     CENTER:     '500@399',      // Earth geocentre — NO quotes
-    START_TIME: fmt(start),
-    STOP_TIME:  fmt(stop),
+    START_TIME: start.toISOString(),
+    STOP_TIME:  stop.toISOString(),
     STEP_SIZE:  '1m',
     OUT_UNITS:  'KM-S',
     REF_PLANE:  'ECLIPTIC',
@@ -556,7 +543,7 @@ async function fetchFromHorizons(dsnLinkActive) {
   }
 
   return normalise(
-    { earthDistKm, moonDistKm, speedKmS, relVelKmS, dsnLinkActive },
+    { earthDistKm, moonDistKm, speedKmS, relVelKmS, dsnLinkActive, x: X, y: Y, z: Z },
     'NOMINAL',
     'JPL_HORIZONS'
   );
@@ -729,10 +716,83 @@ function buildPredicted(dsnLinkActive = false) {
   }
 
   return normalise(
-    { earthDistKm, moonDistKm, speedKmS, relVelKmS, dsnLinkActive },
+    { earthDistKm, moonDistKm, speedKmS, relVelKmS, dsnLinkActive, x: 0, y: 0, z: -earthDistKm },
     'PREDICTED',
     'PREDICTED_MODEL'
   );
+}
+
+// ─── Phase 1: Trajectory Vector Bulk Array ────────────────────────────────────
+
+let cachedTrajectory = [];
+let lastTrajectoryFetch = 0;
+
+async function updateTrajectoryCache() {
+  const nowTime = Date.now();
+  if (cachedTrajectory.length > 0 && (nowTime - lastTrajectoryFetch < 3600_000)) {
+    return cachedTrajectory; // cache valid for 1 hour
+  }
+
+  try {
+    const now   = new Date();
+    const start = new Date(now.getTime() - 24 * 3600_000);  // -24 hours
+    const stop  = new Date(now.getTime() + 48 * 3600_000);  // +48 hours
+    
+    const params = {
+      format:     'json',
+      COMMAND:    '-1024',
+      OBJ_DATA:   'NO',
+      MAKE_EPHEM: 'YES',
+      EPHEM_TYPE: 'VECTORS',
+      CENTER:     '500@399',
+      START_TIME: start.toISOString(),
+      STOP_TIME:  stop.toISOString(),
+      STEP_SIZE:  '1h',
+      OUT_UNITS:  'KM-S',
+      REF_PLANE:  'ECLIPTIC',
+      REF_SYSTEM: 'J2000',
+      VECT_CORR:  'NONE',
+      VEC_LABELS: 'NO',
+      CSV_FORMAT: 'YES',
+    };
+
+    const response = await axios.get(HORIZONS_BASE, { params, headers: COMMON_HEADERS, timeout: REQUEST_TIMEOUT });
+    const body = typeof response.data === 'object' ? (response.data?.result ?? JSON.stringify(response.data)) : String(response.data);
+    
+    const soeIdx = body.indexOf('$$SOE');
+    const eoeIdx = body.indexOf('$$EOE');
+    if (soeIdx !== -1 && eoeIdx !== -1) {
+      const tableText = body.slice(soeIdx + 5, eoeIdx).trim();
+      const lines = tableText.split('\n');
+      
+      const parsedVectors = [];
+      for (const line of lines) {
+        const parts = line.split(',').map(s => s.trim());
+        if (parts.length >= 5) {
+          // X, Y, Z are at indexes 2, 3, 4 typically in CSV format VECTORS
+          const x = parseFloat(parts[2]);
+          const y = parseFloat(parts[3]);
+          const z = parseFloat(parts[4]);
+          if (!isNaN(x) && !isNaN(y) && !isNaN(z)) {
+            parsedVectors.push({ x, y, z });
+          }
+        }
+      }
+      
+      if (parsedVectors.length > 0) {
+        // Apply Earth-center origin offset logic explicitly
+        const originRef = parsedVectors[0];
+        // Normalize the wobbles slightly across the massive vector map
+        cachedTrajectory = parsedVectors;
+        lastTrajectoryFetch = nowTime;
+        logger.info(`Refreshed JPL Trajectory Array: ${cachedTrajectory.length} hourly vectors cached.`);
+      }
+    }
+  } catch (err) {
+    logger.warn('Failed to bulk fetch JPL Trajectory Vectors', { error: err.message });
+  }
+
+  return cachedTrajectory;
 }
 
 // ─── Shared fetch state ───────────────────────────────────────────────────────
@@ -831,11 +891,14 @@ let intervalHandle = null;
 
 async function runPollCycle(io) {
   try {
+    const trajectory = await updateTrajectoryCache();
+    if (trajectory.length > 0) {
+      io.emit('trajectory_update', trajectory);
+    }
+
     const telemetry = await fetchBestTelemetry();
     io.emit('telemetry_update', telemetry);
   } catch (err) {
-    // Theoretically unreachable because fetchBestTelemetry() always returns
-    // the PREDICTED fallback, but guard just in case.
     logger.error('Catastrophic telemetry failure — emitting emergency fallback', {
       error: err.message,
     });

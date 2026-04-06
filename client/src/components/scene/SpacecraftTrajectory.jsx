@@ -235,14 +235,31 @@ export const SpacecraftTrajectory = () => {
 
     const currentMoonNode = getMoonPositionAtTime(metH);
 
-    // Force geometric tracing (disregard backend 0,0,-Z static states)
-    const t  = Math.min(1, earthDistKm / (earthDistKm + moonDistKm));
-    const scPos = EARTH_POS.clone().lerp(currentMoonNode, t);
+    let scPos = new THREE.Vector3(
+      (tel.position?.x || 0) * SCALE,
+      (tel.position?.y || 0) * SCALE,
+      (tel.position?.z || 0) * SCALE
+    );
+
+    // Force geometric tracing (fallback if backend 0,0,-Z static states are still live)
+    if (Math.abs(scPos.x) < 0.1 && Math.abs(scPos.y) < 0.1 && scPos.z < 0) {
+      const t  = Math.min(1, earthDistKm / (earthDistKm + moonDistKm));
+      scPos = EARTH_POS.clone().lerp(currentMoonNode, t);
+    }
 
     const total    = earthDistKm + moonDistKm;
     const progress = total > 0 ? Math.min(1, earthDistKm / total) : 0;
 
-    const curve = buildFreeReturnCurve(scPos, phaseId, progress, currentMoonNode);
+    let curve;
+    if (tel.trajectoryVectors && tel.trajectoryVectors.length >= 2) {
+      // Pure JPL Physics trajectory!
+      const vectors = tel.trajectoryVectors.map(v => new THREE.Vector3(v.x * SCALE, v.y * SCALE, v.z * SCALE));
+      curve = new THREE.CatmullRomCurve3(vectors, false, 'catmullrom');
+    } else {
+      // Fallback Algorithm
+      curve = buildFreeReturnCurve(scPos, phaseId, progress, currentMoonNode);
+    }
+
     const scT = findCurveT(curve, scPos);
 
     const numTravelled = Math.max(2, Math.round(scT       * CURVE_POINTS));

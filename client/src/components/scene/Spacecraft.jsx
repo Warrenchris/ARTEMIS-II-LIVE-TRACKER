@@ -70,8 +70,6 @@ export const Spacecraft = () => {
           color="#c8c8d8"
           roughness={0.3}
           metalness={0.8}
-          emissive="#0B3D91"
-          emissiveIntensity={0.25}
         />
       </mesh>
 
@@ -91,25 +89,7 @@ export const Spacecraft = () => {
         <meshStandardMaterial color="#555566" roughness={0.6} metalness={0.9} />
       </mesh>
 
-      {/* ── Engine Glow (animated) ── */}
-      <mesh ref={glowRef} position={[0, -1.45, 0]}>
-        <sphereGeometry args={[0.24, 12, 12]} />
-        <meshBasicMaterial
-          color="#FC3D21"
-          transparent
-          opacity={0.4}
-          depthWrite={false}
-        />
-      </mesh>
-
-      {/* ── Point light from engine ── */}
-      <pointLight
-        position={[0, -1.4, 0]}
-        color="#FC3D21"
-        intensity={3}
-        distance={8}
-        decay={2}
-      />
+    {/* Engine Glow Removed for True Blackout Realism */}
 
       {/* ── Visual Locator (Always visible) ── */}
       <Html center zIndexRange={[100, 0]}>

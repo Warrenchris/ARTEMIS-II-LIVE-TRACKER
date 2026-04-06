@@ -39,6 +39,8 @@ export const Moon = React.memo(() => {
         roughness={0.95}
         metalness={0.0}
       />
+      {/* ── Lunar Bounce / Albedo Light ── */}
+      <pointLight color="#8caebf" intensity={1.5} distance={20} decay={2.0} />
     </mesh>
   );
 });

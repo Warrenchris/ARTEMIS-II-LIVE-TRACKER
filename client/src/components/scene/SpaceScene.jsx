@@ -35,7 +35,7 @@ export const SpaceScene = () => {
           <color attach="background" args={['#050B14']} />
 
           {/* Lighting */}
-          <ambientLight intensity={0.01} />
+          <ambientLight intensity={0.02} />
           <directionalLight
             position={[300, 60, 150]}
             intensity={3.5}
