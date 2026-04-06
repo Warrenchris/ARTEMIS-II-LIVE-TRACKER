@@ -123,13 +123,29 @@ app.use((err, _req, res, _next) => {
 
 // ─── Boot ─────────────────────────────────────────────────────────────────────
 
-startTelemetryStream(io);
-
-server.listen(PORT, () => {
-  logger.info('Server listening', { port: PORT, clientUrl: CLIENT_URL, env: process.env.NODE_ENV || 'development' });
+// Handle EADDRINUSE *before* calling listen so it never reaches uncaughtException
+server.on('error', (err) => {
+  if (err.code === 'EADDRINUSE') {
+    logger.error(
+      `Port ${PORT} is already in use. Kill the existing process first:\n` +
+      `  Windows : netstat -ano | findstr :${PORT}  (note PID, then: taskkill /PID <PID> /F)\n` +
+      `  All OSes: npx kill-port ${PORT}`,
+      { code: err.code, port: PORT },
+    );
+  } else {
+    logger.error('Server error', { code: err.code, error: err.message });
+  }
+  process.exit(1);
 });
 
-// Handle uncaught errors so the process doesn't silently crash
+// Only start the telemetry polling after the TCP port is confirmed bound.
+// This prevents zombie setInterval handles if listen() fails.
+server.listen(PORT, () => {
+  logger.info('Server listening', { port: PORT, clientUrl: CLIENT_URL, env: process.env.NODE_ENV || 'development' });
+  startTelemetryStream(io);
+});
+
+// Handle any remaining uncaught errors so the process doesn't silently crash
 process.on('uncaughtException', (err) => {
   logger.error('Uncaught exception — shutting down', { error: err.message, stack: err.stack });
   process.exit(1);

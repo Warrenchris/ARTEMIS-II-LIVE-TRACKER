@@ -1,13 +1,13 @@
-import React, { Suspense, useState, useCallback } from 'react';
-import { Canvas } from '@react-three/fiber';
-import { OrbitControls, Stars, Preload } from '@react-three/drei';
-import { Earth } from './Earth';
-import { Moon } from './Moon';
-import { Spacecraft } from './Spacecraft';
-import { Trajectory } from './Trajectory';
-import { CameraController } from './CameraController';
-import { ErrorBoundary } from '../ErrorBoundary';
-import { LoadingScreen } from '../LoadingScreen';
+import React, { Suspense, useState, useCallback, useRef } from 'react';
+import { Canvas }                                         from '@react-three/fiber';
+import { OrbitControls, Stars, Preload }                  from '@react-three/drei';
+import { Earth }                                          from './Earth';
+import { Moon }                                           from './Moon';
+import { Spacecraft }                                     from './Spacecraft';
+import { Trajectory }                                     from './Trajectory';
+import { CameraController }                               from './CameraController';
+import { ErrorBoundary }                                  from '../ErrorBoundary';
+import { LoadingScreen }                                  from '../LoadingScreen';
 
 const SceneFallback = () => null;
 
@@ -52,6 +52,11 @@ export const SpaceScene = () => {
             <Earth />
             <Moon />
             <Spacecraft />
+
+            {/*
+              Trajectory renders the Free Return CatmullRom arc.
+              It reads telemetry imperatively via useTelemetryRef() — no re-renders.
+            */}
             <Trajectory />
 
             <Preload all />

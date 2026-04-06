@@ -201,6 +201,8 @@ async function fetchWithBackoff() {
 
       const httpStatus  = err.response?.status;
       const errDetail   = httpStatus ? `HTTP ${httpStatus}` : err.code ?? err.message;
+      const isClientError = httpStatus >= 400 && httpStatus < 500;
+      const shouldRetry = attempt < MAX_RETRIES && !isClientError;
       const backoffMs   = Math.pow(2, attempt) * 1000; // 2s, 4s, 8s
 
       logger.warn('NASA API fetch failed', {
@@ -208,11 +210,13 @@ async function fetchWithBackoff() {
         maxRetries: MAX_RETRIES,
         url: NASA_URL,
         error: errDetail,
-        nextRetryMs: attempt < MAX_RETRIES ? backoffMs : null,
+        nextRetryMs: shouldRetry ? backoffMs : null,
       });
 
-      if (attempt < MAX_RETRIES) {
+      if (shouldRetry) {
         await new Promise((res) => setTimeout(res, backoffMs));
+      } else {
+        throw err;
       }
     }
   }
@@ -225,11 +229,19 @@ async function fetchWithBackoff() {
 
 let consecutiveApiFailures = 0;
 let intervalHandle         = null;
+let isCircuitBroken        = false;
 
 // ─── Poll Cycle ───────────────────────────────────────────────────────────────
 
 async function runPollCycle(io) {
   try {
+    if (isCircuitBroken) {
+      // API is considered dead; quietly emit PREDICTED fallback
+      const fallback = buildPredicted();
+      io.emit('telemetry_update', fallback);
+      return;
+    }
+
     const telemetry          = await fetchWithBackoff();
     consecutiveApiFailures   = 0;
 
@@ -243,11 +255,21 @@ async function runPollCycle(io) {
 
   } catch (err) {
     consecutiveApiFailures += 1;
+    const isClientError = err.response?.status >= 400 && err.response?.status < 500;
 
-    logger.error('All API retries exhausted — using PREDICTED fallback', {
-      consecutive: consecutiveApiFailures,
-      error:       err.message,
-    });
+    if (isClientError || consecutiveApiFailures >= 5) {
+      isCircuitBroken = true;
+      logger.error('Circuit breaker tripped — API disabled for this session (using PREDICTED fallback continuously)', {
+        consecutive: consecutiveApiFailures,
+        error: err.message,
+        reason: isClientError ? `Client error ${err.response?.status}` : 'Too many consecutive failures',
+      });
+    } else {
+      logger.error('All API retries exhausted — using PREDICTED fallback', {
+        consecutive: consecutiveApiFailures,
+        error:       err.message,
+      });
+    }
 
     const fallback = buildPredicted();
     io.emit('telemetry_update', fallback);
