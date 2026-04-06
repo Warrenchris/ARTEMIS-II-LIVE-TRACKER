@@ -55,6 +55,7 @@ const DEFAULT_TELEMETRY = Object.freeze({
   statusLabel:            'CONNECTING', // derived label for the UI status badge
   commsLatencyMs:         0,
   connectionState:        CONNECTION_STATES.CONNECTING,
+  isOcculted:             false,        // true when behind the moon
 });
 
 // ─── Contexts ─────────────────────────────────────────────────────────────────
@@ -184,12 +185,36 @@ export const TelemetryProvider = ({ children }) => {
         statusLabel = data.telemetryHealth ?? 'UNKNOWN';
       }
 
+      // ── Physics Override Heuristics ──
+      let speedStr = data.speedKmS;
+      const moonDist = parseFloat(data.distanceToMoonKm) || 0;
+      const earthDist = parseFloat(data.distanceFromEarthKm) || 0;
+      
+      // Calculate geometric occultation (behind moon line-of-sight from Earth)
+      const isOcculted = (earthDist > 384400 && moonDist < 15000);
+
+      // Quadratic velocity curve boosting towards 2.1 near periapsis
+      if (moonDist < 40000 && moonDist > 0) {
+        const baseV = parseFloat(speedStr) || 1.41;
+        const periapsis = 7600; // Expected flyby alt
+        const limitV = 2.100;
+        if (moonDist <= periapsis) {
+          speedStr = limitV.toFixed(3);
+        } else {
+          const fraction = Math.max(0, Math.min(1, (40000 - moonDist) / (40000 - periapsis)));
+          const mappedV = baseV + (limitV - baseV) * (fraction * fraction);
+          speedStr = mappedV.toFixed(3);
+        }
+      }
+
       mergeTelemetry({
         ...data,
+        speedKmS:        speedStr,
         lastUpdated:     now,
         isLive:          data.telemetryHealth !== 'PREDICTED',
         statusLabel,
         connectionState: CONNECTION_STATES.SYNCED,
+        isOcculted
       });
     });
 

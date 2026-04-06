@@ -226,6 +226,9 @@ export const SpacecraftTrajectory = () => {
     if (flowMatRef.current) {
       flowMatRef.current.uniforms.uTime.value = state.clock.elapsedTime;
     }
+    if (plannedLine && plannedLine.material) {
+      plannedLine.material.dashOffset -= 0.08; // Pulse forward with energy
+    }
 
     if (Math.abs(earthDistKm - lastEarthDistRef.current) < UPDATE_THRESHOLD_KM) return;
     lastEarthDistRef.current = earthDistKm;

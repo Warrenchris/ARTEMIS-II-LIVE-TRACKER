@@ -35,15 +35,15 @@ export const SpaceScene = () => {
           <color attach="background" args={['#050B14']} />
 
           {/* Lighting */}
-          <ambientLight intensity={0.05} />
+          <ambientLight intensity={0.01} />
           <directionalLight
             position={[300, 60, 150]}
             intensity={3.5}
             castShadow={false}
             color="#fff8ee"
           />
-          {/* Subtle Earth-shine fill light */}
-          <pointLight position={[0, 0, 0]} color="#4db8ff" intensity={0.4} distance={50} />
+          {/* Earth-shine fill light - high decay creates pure blackness on Lunar far side */}
+          <pointLight position={[0, 0, 0]} color="#4db8ff" intensity={4} distance={400} decay={2.5} />
 
           <Suspense fallback={<SceneFallback />}>
             {/* Starfield — two layers for depth */}
