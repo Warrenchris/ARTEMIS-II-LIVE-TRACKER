@@ -90,7 +90,7 @@ export const TelemetryDashboard = () => {
       initial={{ opacity: 0, x: -50 }}
       animate={{ opacity: 1, x: 0 }}
       transition={{ duration: 0.8, ease: 'easeOut' }}
-      className="absolute top-8 left-8 w-80 max-h-[calc(100vh-200px)] overflow-y-auto scrollbar-hide z-10 pointer-events-auto"
+      className="absolute top-8 left-8 w-80 max-h-[calc(100vh-200px)] overflow-y-auto scrollbar-hide z-10 pointer-events-none"
     >
       {/* Signal Lost Overlay */}
       <AnimatePresence>
@@ -128,7 +128,7 @@ export const TelemetryDashboard = () => {
               exit={{ opacity: 0, y: -6 }}
               className="text-sm font-semibold text-nasa-blue"
             >
-              {telemetry.phase}
+              {telemetry.distanceToMoonKm < 50000 && telemetry.distanceToMoonKm > 0 ? "STATUS: LUNAR FLYBY (ACTIVE)" : (telemetry.phase === 'Lunar Flyby' ? "FREE RETURN ENGAGED" : telemetry.phase)}
             </motion.span>
           </AnimatePresence>
         </StatRow>

@@ -9,8 +9,7 @@ export const PHASES = [
   { id: 'earth_orbit', label: 'Earth Orbit',           icon: Globe2          },
   { id: 'tli',         label: 'TLI',                   icon: ArrowUpCircle   },
   { id: 'transit',     label: 'Lunar Transit',          icon: Orbit           },
-  { id: 'approach',    label: 'Approach',               icon: Orbit           },
-  { id: 'loi',         label: 'Orbit Insertion',        icon: Flag            },
+  { id: 'flyby',       label: 'Approach/Flyby',         icon: Orbit           },
   { id: 'return',      label: 'Return',                 icon: PlaneLanding    },
   { id: 'splashdown',  label: 'Splashdown',             icon: Waves           },
 ];
@@ -69,7 +68,7 @@ export const MissionTimeline = React.memo(() => {
       initial={{ opacity: 0, y: 50 }}
       animate={{ opacity: 1, y: 0 }}
       transition={{ duration: 0.8, delay: 0.3 }}
-      className="absolute bottom-8 left-1/2 -translate-x-1/2 w-[calc(100%-3rem)] max-w-5xl glass-panel px-6 py-5 z-10 pointer-events-auto backdrop-blur-sm shadow-2xl"
+      className="absolute bottom-0 left-1/2 -translate-x-1/2 w-[calc(100%-3rem)] max-w-5xl glass-panel px-6 py-5 z-10 pointer-events-auto backdrop-blur-sm shadow-2xl"
     >
       {/* Header */}
       <div className="flex justify-between items-center mb-5">

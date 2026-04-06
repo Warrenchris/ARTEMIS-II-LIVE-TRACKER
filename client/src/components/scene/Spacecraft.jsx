@@ -4,6 +4,7 @@ import { Html } from '@react-three/drei';
 import { useTelemetryRef } from '../../contexts/TelemetryContext';
 import * as THREE from 'three';
 import { MOON_SCENE_POSITION } from './Moon';
+import { getMoonPositionAtTime } from './MoonOrbit';
 
 const SCALE   = 1 / 1000;    // km → scene units
 const EPSILON = 0.0005;       // skip lerp below this positional delta
@@ -15,16 +16,20 @@ export const Spacecraft = () => {
 
   // Stable target position — mutated inside useFrame, no state involved
   const targetPos = useRef(new THREE.Vector3(0, 0, -10));
-  const moonVec   = useMemo(() => new THREE.Vector3(...MOON_SCENE_POSITION), []);
 
   useFrame((state, delta) => {
     const tel = telemetryRef.current;
-    const p   = tel?.position;
-
-    // Update target from latest telemetry ref (imperative — never triggers render)
-    if (p) {
-      targetPos.current.set(p.x * SCALE, p.y * SCALE, p.z * SCALE);
-    }
+    
+    // Override raw backend coordinates, position craft analytically along the earth-moon axis bound to live distances
+    const metH = parseFloat(tel?.missionElapsedHours) || 0;
+    const earthDistKm = parseFloat(tel?.distanceFromEarthKm) || 0;
+    const moonDistKm  = parseFloat(tel?.distanceToMoonKm) || 384400;
+    const currentMoonNode = getMoonPositionAtTime(metH);
+    
+    const tScale = Math.min(1, earthDistKm / (earthDistKm + moonDistKm));
+    const calculatedPos = new THREE.Vector3(0, 0, 0).lerp(currentMoonNode, tScale);
+    
+    targetPos.current.copy(calculatedPos);
 
     const g = groupRef.current;
     if (!g) return;
@@ -35,8 +40,8 @@ export const Spacecraft = () => {
       g.position.lerp(targetPos.current, Math.min(1, delta * 2));
     }
 
-    // Orient towards Moon
-    g.lookAt(moonVec);
+    // Orient towards dynamic Moon position
+    g.lookAt(currentMoonNode);
 
     // Engine glow pulse
     if (glowRef.current) {
@@ -47,7 +52,7 @@ export const Spacecraft = () => {
   });
 
   return (
-    <group ref={groupRef} position={[0, 0, -10]}>
+    <group ref={groupRef} position={[0, 0, -10]} scale={0.08}>
       {/* ── Service Module (cylinder) ── */}
       <mesh position={[0, -0.6, 0]}>
         <cylinderGeometry args={[0.35, 0.4, 0.9, 16]} />
@@ -108,8 +113,8 @@ export const Spacecraft = () => {
 
       {/* ── Visual Locator (Always visible) ── */}
       <Html center zIndexRange={[100, 0]}>
-        <div className="w-5 h-5 rounded-full border border-nasa-blue/50 flex items-center justify-center pointer-events-none">
-          <div className="w-1.5 h-1.5 rounded-full bg-white shadow-[0_0_10px_#4db8ff]"></div>
+        <div className="w-16 h-16 rounded-full border border-nasa-blue/40 flex items-center justify-center pointer-events-none transition-transform scale-[2] origin-center">
+          <div className="w-2.5 h-2.5 rounded-full bg-white shadow-[0_0_12px_#4db8ff]"></div>
         </div>
       </Html>
     </group>

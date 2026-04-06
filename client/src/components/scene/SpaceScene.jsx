@@ -4,7 +4,8 @@ import { OrbitControls, Stars, Preload }                  from '@react-three/dre
 import { Earth }                                          from './Earth';
 import { Moon }                                           from './Moon';
 import { Spacecraft }                                     from './Spacecraft';
-import { Trajectory }                                     from './Trajectory';
+import { MoonOrbit }                                      from './MoonOrbit';
+import { SpacecraftTrajectoryWithDashes }                 from './SpacecraftTrajectory';
 import { CameraController }                               from './CameraController';
 import { ErrorBoundary }                                  from '../ErrorBoundary';
 import { LoadingScreen }                                  from '../LoadingScreen';
@@ -54,10 +55,10 @@ export const SpaceScene = () => {
             <Spacecraft />
 
             {/*
-              Trajectory renders the Free Return CatmullRom arc.
-              It reads telemetry imperatively via useTelemetryRef() — no re-renders.
+              Trajectory renders the Path-Conics physics simulation.
             */}
-            <Trajectory />
+            <MoonOrbit />
+            <SpacecraftTrajectoryWithDashes />
 
             <Preload all />
           </Suspense>

@@ -17,7 +17,7 @@ export const CameraControlsUI = () => {
       initial={{ opacity: 0, y: 30 }}
       animate={{ opacity: 1, y: 0 }}
       transition={{ duration: 0.6, delay: 0.2 }}
-      className="absolute bottom-[170px] left-1/2 -translate-x-1/2 flex items-center gap-1 glass-panel p-1.5 z-20 pointer-events-auto"
+      className="absolute bottom-40 left-1/2 -translate-x-1/2 flex items-center gap-1 glass-panel p-1.5 z-20 pointer-events-auto"
     >
       {targets.map((t) => {
         const isActive = focusTarget === t.id;

@@ -4,7 +4,7 @@ import { OrbitControls } from '@react-three/drei';
 import * as THREE from 'three';
 import { useCameraContext } from '../../contexts/CameraContext';
 import { useTelemetryRef } from '../../contexts/TelemetryContext';
-import { MOON_SCENE_POSITION } from './Moon';
+import { getMoonPositionAtTime } from './MoonOrbit';
 
 const SCALE = 1 / 1000;
 
@@ -16,7 +16,6 @@ export const CameraController = () => {
 
   // Pre-allocate vectors to avoid runtime allocation in the useFrame loop
   const earthVec = useMemo(() => new THREE.Vector3(0, 0, 0), []);
-  const moonVec  = useMemo(() => new THREE.Vector3(...MOON_SCENE_POSITION), []);
   const tempVec  = useMemo(() => new THREE.Vector3(), []);
 
   useFrame((_, delta) => {
@@ -27,19 +26,18 @@ export const CameraController = () => {
     if (focusTarget === 'earth') {
       tempVec.copy(earthVec);
     } else if (focusTarget === 'moon') {
-      tempVec.copy(moonVec);
+      const tel = telemetryRef.current;
+      const metH = parseFloat(tel?.missionElapsedHours) || 0;
+      tempVec.copy(getMoonPositionAtTime(metH));
     } else if (focusTarget === 'spacecraft') {
       const tel = telemetryRef.current;
-      if (tel && tel.position) {
-        // Spacecraft coordinate system matching Spacecraft.jsx
-        tempVec.set(
-          tel.position.x * SCALE,
-          tel.position.y * SCALE,
-          tel.position.z * SCALE
-        );
-      } else {
-        tempVec.copy(earthVec); // Fallback if no telemetry
-      }
+      const metH = parseFloat(tel?.missionElapsedHours) || 0;
+      const earthDistKm = parseFloat(tel?.distanceFromEarthKm) || 0;
+      const moonDistKm  = parseFloat(tel?.distanceToMoonKm)    || 384400;
+      
+      const currentMoonNode = getMoonPositionAtTime(metH);
+      const t  = Math.min(1, earthDistKm / (earthDistKm + moonDistKm));
+      tempVec.copy(earthVec).lerp(currentMoonNode, t);
     }
 
     // 2. Smoothly lerp the OrbitControls target to the desired tempVec position
