@@ -51,6 +51,38 @@ const ScrambledText = () => {
   return <span className="font-mono text-nasa-red opacity-80 animate-pulse">{text}</span>;
 };
 
+// ── Countdown Timer ────────────────────────────────────────────────────────────
+const CountdownTimer = ({ milliseconds, label = 'Time to Periselene' }) => {
+  const [displayTime, setDisplayTime] = useState('--:--');
+
+  useEffect(() => {
+    if (!milliseconds || milliseconds <= 0) {
+      setDisplayTime('ARRIVED');
+      return;
+    }
+
+    const updateDisplay = () => {
+      const totalSecs = Math.max(0, Math.floor(milliseconds / 1000));
+      const minutes = Math.floor(totalSecs / 60);
+      const seconds = totalSecs % 60;
+      setDisplayTime(`${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`);
+    };
+
+    updateDisplay();
+    const interval = setInterval(updateDisplay, 500);
+    return () => clearInterval(interval);
+  }, [milliseconds]);
+
+  return (
+    <div className="flex flex-col gap-1">
+      <div className="text-3xl font-mono font-bold text-nasa-red tracking-widest animate-pulse">
+        {displayTime}
+      </div>
+      <div className="text-[9px] text-gray-500 tracking-widest uppercase">{label}</div>
+    </div>
+  );
+};
+
 const LiveMetric = ({ value, decimals, color = 'text-white', isOcculted, unit }) => {
   if (isOcculted) {
     const predVal = parseFloat(value).toLocaleString(undefined, { minimumFractionDigits: decimals, maximumFractionDigits: decimals });
@@ -136,9 +168,9 @@ export const TelemetryDashboard = () => {
       initial={{ opacity: 0, x: -50 }}
       animate={{ opacity: 1, x: 0 }}
       transition={{ duration: 0.8, ease: 'easeOut' }}
-      className="absolute top-8 left-8 w-80 max-h-[calc(100vh-200px)] overflow-y-auto scrollbar-hide z-10 pointer-events-none"
+      className="absolute top-8 left-8 w-80 z-10 pointer-events-none"
     >
-      <div className="relative glass-panel rounded-lg p-5 overflow-hidden">
+      <div className="relative glass-panel-transparent rounded-lg p-5 max-h-[min(calc(100vh-8rem),calc(100dvh-8rem))] min-h-0 overflow-y-auto overflow-x-hidden overscroll-y-contain pointer-events-auto scrollbar-hide">
         
         {/* CRT Scanline Overlay during Occultation */}
         {telemetry.isOcculted && (
@@ -206,6 +238,16 @@ export const TelemetryDashboard = () => {
                   <AlertTriangle size={14} className="mr-1" />
                   LOSS: LUNAR OCCULTATION
                 </motion.div>
+              ) : telemetry.isClosestApproach ? (
+                <motion.span
+                  key="closest_approach"
+                  initial={{ opacity: 0, y: 6 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  exit={{ opacity: 0, y: -6 }}
+                  className="text-sm font-semibold text-nasa-red animate-pulse"
+                >
+                  ⚡ CLOSEST APPROACH ⚡
+                </motion.span>
               ) : (
                 <motion.span
                   key={telemetry.phase}
@@ -227,6 +269,20 @@ export const TelemetryDashboard = () => {
           <StatRow icon={null} label="Distance to Moon">
             <LiveMetric value={telemetry.distanceToMoonKm} color="text-gray-200" isOcculted={telemetry.isOcculted} unit="km" />
           </StatRow>
+
+          {telemetry.isClosestApproach && telemetry.estTimeToPeriselenesMs !== null && (
+            <motion.div
+              initial={{ opacity: 0, scale: 0.95 }}
+              animate={{ opacity: 1, scale: 1 }}
+              transition={{ duration: 0.3 }}
+              className="py-3 px-3 bg-red-900/30 border border-nasa-red/60 rounded-lg"
+            >
+              <CountdownTimer milliseconds={telemetry.estTimeToPeriselenesMs} label="ETA Periselene (8,900 km)" />
+              <div className="mt-2 text-[9px] text-red-300/80 tracking-widest space-y-1">
+                <div>Closure Rate: <span className="font-mono text-red-200">{telemetry.closureRateKmS?.toFixed(2)}</span> km/s</div>
+              </div>
+            </motion.div>
+          )}
 
           <StatRow icon={<Zap size={14} />} label="Relative Velocity">
             <LiveMetric value={telemetry.relativeVelocityKmH ?? 0} decimals={1} isOcculted={telemetry.isOcculted} unit="km/h" />

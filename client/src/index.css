@@ -33,6 +33,14 @@
     box-shadow: 0 8px 32px rgba(0, 0, 0, 0.6);
   }
 
+  /* Orion telemetry HUD — fully clear, no blur (scene reads through unobstructed) */
+  .glass-panel-transparent {
+    background-color: transparent;
+    border: 1px solid rgba(255, 255, 255, 0.06);
+    border-radius: 0.75rem;
+    box-shadow: none;
+  }
+
   .glow-text       { text-shadow: 0 0 10px rgba(255, 255, 255, 0.5); }
   .glow-text-blue  { text-shadow: 0 0 12px rgba(11, 61, 145, 0.9);  }
   .glow-text-red   { text-shadow: 0 0 12px rgba(252, 61, 33, 0.9);  }
@@ -44,4 +52,5 @@
   .scrollbar-hide::-webkit-scrollbar {
     display: none;
   }
+
 }

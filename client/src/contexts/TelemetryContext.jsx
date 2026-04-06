@@ -61,6 +61,9 @@ const DEFAULT_TELEMETRY = Object.freeze({
   connectionState:        CONNECTION_STATES.CONNECTING,
   isOcculted:             false,        // true when behind the moon
   trajectoryVectors:      { spacecraft: [], moon: [], generatedAt: null },
+  isClosestApproach:      false,        // true when moonDistKm < 9,500 km
+  estTimeToPeriselenesMs: null,         // estimated ms until reaching 8,900 km
+  closureRateKmS:         0,            // rate of approach in km/s
 });
 
 // ─── Contexts ─────────────────────────────────────────────────────────────────
@@ -100,6 +103,46 @@ function clog(level, msg, meta = {}) {
 const STALE_THRESHOLD_MS    = 60_000; // 60 seconds
 const STALE_CHECK_INTERVAL  = 10_000; // check every 10 seconds
 
+/** Mean lunar radius (km) — must match server/services/telemetry.js */
+const MOON_RADIUS_KM = 1737;
+
+/**
+ * True when the Earth→spacecraft line segment intersects the Moon sphere first
+ * (spacecraft behind the lunar disk from Earth). Uses geocentric km vectors.
+ * The old distance-only heuristic (earth > 384400 && moon < 15000) was always
+ * true during normal lunar approach, which incorrectly triggered the occultation HUD.
+ */
+function isLunarDiskOccultation(position, moonPosition) {
+  const sx = Number(position?.x) || 0;
+  const sy = Number(position?.y) || 0;
+  const sz = Number(position?.z) || 0;
+  const mx = Number(moonPosition?.x) || 0;
+  const my = Number(moonPosition?.y) || 0;
+  const mz = Number(moonPosition?.z) || 0;
+
+  const sLen = Math.hypot(sx, sy, sz);
+  const mLen = Math.hypot(mx, my, mz);
+  if (sLen < 1e3 || mLen < 1e5) return false;
+
+  const dx = sx / sLen;
+  const dy = sy / sLen;
+  const dz = sz / sLen;
+
+  const dm = dx * mx + dy * my + dz * mz;
+  const cm = mx * mx + my * my + mz * mz - MOON_RADIUS_KM * MOON_RADIUS_KM;
+  const inner = dm * dm - cm;
+  if (inner < 0) return false;
+
+  const root = Math.sqrt(inner);
+  const t1 = dm - root;
+  const t2 = dm + root;
+  const hits = [t1, t2].filter((t) => t > 1e-3);
+  if (hits.length === 0) return false;
+
+  const tEnter = Math.min(...hits);
+  return tEnter < sLen - 1e-3;
+}
+
 // ─── Provider ─────────────────────────────────────────────────────────────────
 
 export const TelemetryProvider = ({ children }) => {
@@ -108,6 +151,9 @@ export const TelemetryProvider = ({ children }) => {
   // Mutable ref — always holds the latest telemetry, readable without re-renders
   const telemetryRef = useRef({ ...DEFAULT_TELEMETRY });
 
+  // Closest approach tracking — stores { moonDistKm, timestamp } pairs
+  const moonDistHistoryRef = useRef([]);
+
   /** Merge incoming data into both state (reactive) and ref (imperative). */
   const mergeTelemetry = (patch) => {
     setTelemetry((prev) => {
@@ -115,6 +161,48 @@ export const TelemetryProvider = ({ children }) => {
       telemetryRef.current = next;
       return next;
     });
+  };
+
+  /**
+   * Calculates closest approach countdown based on the last two telemetry readings.
+   * Returns { isClosestApproach, estTimeToPeriselenesMs, closureRateKmS }
+   */
+  const calculateClosestApproach = (moonDistKm) => {
+    const CLOSEST_APPROACH_THRESHOLD = 9_500; // km
+    const PERISELENE_TARGET = 8_900; // km
+    const isClosestApproach = moonDistKm < CLOSEST_APPROACH_THRESHOLD && moonDistKm > 0;
+
+    const history = moonDistHistoryRef.current;
+    let closureRateKmS = 0;
+    let estTimeToPeriselenesMs = null;
+
+    // Keep only the last 2 entries (current + previous) for closure rate calculation
+    if (history.length > 2) {
+      history.shift();
+    }
+
+    // Add current reading
+    history.push({ moonDistKm, timestamp: Date.now() });
+
+    // Calculate closure rate from last two readings
+    if (history.length >= 2) {
+      const prev = history[history.length - 2];
+      const curr = history[history.length - 1];
+      const timeDeltaMs = curr.timestamp - prev.timestamp;
+
+      if (timeDeltaMs > 0) {
+        const distanceDeltaKm = prev.moonDistKm - curr.moonDistKm; // positive = approaching
+        closureRateKmS = Math.max(0, distanceDeltaKm / (timeDeltaMs / 1000)); // km/s
+
+        // Calculate ETA to periselene
+        if (closureRateKmS > 0 && moonDistKm > PERISELENE_TARGET) {
+          const remainingDist = moonDistKm - PERISELENE_TARGET;
+          estTimeToPeriselenesMs = Math.round((remainingDist / closureRateKmS) * 1000);
+        }
+      }
+    }
+
+    return { isClosestApproach, estTimeToPeriselenesMs, closureRateKmS };
   };
 
   // ── Socket.IO connection ────────────────────────────────────────────────────
@@ -203,13 +291,13 @@ export const TelemetryProvider = ({ children }) => {
         statusLabel = data.phase || 'LIVE TELEMETRY';
       }
 
-      const earthDist = parseFloat(data.distanceFromEarthKm) || 0;
       const moonDist = parseFloat(data.distanceToMoonKm) || 0;
       const dsnSignalLoss = data.dsnSignalLoss === true;
-      // Calculate geometric occultation (behind moon line-of-sight from Earth)
-      // Restricted purely to physics-math threshold so live telemetry flows normally until the eclipse is geometrically true.
-      const geometricOcculted = (earthDist > 384400 && moonDist < 15000);
+      const geometricOcculted = isLunarDiskOccultation(data.position, data.moonPosition);
       const isOcculted = dsnSignalLoss || geometricOcculted;
+
+      // Calculate closest approach and countdown
+      const { isClosestApproach, estTimeToPeriselenesMs, closureRateKmS } = calculateClosestApproach(moonDist);
 
       setTelemetry((prev) => {
         const next = {
@@ -220,6 +308,9 @@ export const TelemetryProvider = ({ children }) => {
           statusLabel,
           connectionState: CONNECTION_STATES.SYNCED,
           isOcculted,
+          isClosestApproach,
+          estTimeToPeriselenesMs,
+          closureRateKmS,
         };
         telemetryRef.current = next;
         return next;

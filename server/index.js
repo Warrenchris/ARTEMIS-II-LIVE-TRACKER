@@ -82,8 +82,10 @@ const io = new Server(server, {
   },
   // Reduce polling overhead — prefer WebSocket
   transports: ['websocket', 'polling'],
-  pingInterval: 10_000,
-  pingTimeout:  5_000,
+  // Generous timeouts: short pingTimeout caused frequent "ping timeout" disconnects
+  // when the browser tab was throttled or the main thread was busy (e.g. Three.js).
+  pingInterval: 25_000,
+  pingTimeout:  20_000,
 });
 
 io.on('connection', (socket) => {

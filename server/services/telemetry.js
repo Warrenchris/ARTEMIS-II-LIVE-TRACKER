@@ -54,6 +54,20 @@ const POLL_INTERVAL_MS = Math.max(
 
 const SPEED_OF_LIGHT = 299_792.458; // km/s
 
+const LAUNCH_EPOCH = new Date('2026-04-01T18:00:00Z'); // Artemis II launch
+
+// ─── Mission Elapsed Time ────────────────────────────────────────────────────
+
+/**
+ * Returns the mission elapsed hours since launch (April 1, 2026 18:00 UTC).
+ * @returns {number} Elapsed hours
+ */
+function missionElapsedHours() {
+  const now = new Date();
+  const elapsedMs = now.getTime() - LAUNCH_EPOCH.getTime();
+  return elapsedMs / (3600 * 1000);
+}
+
 // ─── Source URLs ──────────────────────────────────────────────────────────────
 
 /**
@@ -71,6 +85,8 @@ const HORIZONS_BASE = 'https://ssd.jpl.nasa.gov/api/horizons.api';
 
 const REQUEST_TIMEOUT  = 14_000; // ms
 const MOON_DISTANCE_STALE_LIMIT_KM = Number(process.env.MOON_DISTANCE_STALE_LIMIT_KM || '50000');
+const EARTH_RADIUS_KM = 6371;   // Mean radius of Earth
+const MOON_RADIUS_KM = 1737;    // Mean radius of Moon
 
 function toHorizonsDateTime(date) {
   const pad = (n) => String(n).padStart(2, '0');
@@ -105,6 +121,23 @@ function resolveAutonomousPhase(moonDistKm, speedKmS, trendState) {
     return { id: 'lunar_influence', label: 'LUNAR_INFLUENCE' };
   }
   return { id: 'deep_space', label: 'DEEP_SPACE_TRANSIT' };
+}
+
+/**
+ * Returns the stale-data threshold for Moon distance at a given MET.
+ * During the flyby window (MET ~96–168 h), strict validation is applied;
+ * outside this window, a more lenient threshold is used.
+ *
+ * @param {number} metH  Mission elapsed hours
+ * @returns {number} Maximum acceptable Moon distance (km) at this MET
+ */
+function staleMoonThresholdKmForMet(metH) {
+  if (metH >= 96 && metH <= 168) {
+    // Flyby window: strict threshold to catch stale data
+    return 50_000;
+  }
+  // Outside flyby: more lenient (Moon can be far away during transit)
+  return 400_000;
 }
 
 // ─── Telemetry Normaliser ─────────────────────────────────────────────────────

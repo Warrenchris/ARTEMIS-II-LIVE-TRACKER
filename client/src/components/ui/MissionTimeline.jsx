@@ -10,6 +10,7 @@ export const PHASES = [
   { id: 'tli',         label: 'TLI',                   icon: ArrowUpCircle   },
   { id: 'transit',     label: 'Lunar Transit',          icon: Orbit           },
   { id: 'flyby',       label: 'Approach/Flyby',         icon: Orbit           },
+  { id: 'closest_approach', label: '⚡ Closest Approach ⚡', icon: Orbit       },
   { id: 'return',      label: 'Return',                 icon: PlaneLanding    },
   { id: 'splashdown',  label: 'Splashdown',             icon: Waves           },
 ];
@@ -51,9 +52,14 @@ const MilestoneNode = ({ milestone, isActive, isPassed, index }) => {
 };
 
 export const MissionTimeline = React.memo(() => {
-  const { phaseId, distanceToMoonKm } = useTelemetry();
+  const { phaseId, distanceToMoonKm, isClosestApproach } = useTelemetry();
 
   const activeIndex = useMemo(() => {
+    // Closest approach takes highest priority
+    if (isClosestApproach) {
+      return PHASES.findIndex(p => p.id === 'closest_approach');
+    }
+
     const livePhaseAlias = {
       deep_space_transit: 'transit',
       lunar_influence: 'flyby',
@@ -72,7 +78,7 @@ export const MissionTimeline = React.memo(() => {
     }
 
     return idx === -1 ? 0 : idx;
-  }, [phaseId, distanceToMoonKm]);
+  }, [phaseId, distanceToMoonKm, isClosestApproach]);
 
   const progressPct = useMemo(() =>
     PHASES.length <= 1 ? 0 : (activeIndex / (PHASES.length - 1)) * 100,

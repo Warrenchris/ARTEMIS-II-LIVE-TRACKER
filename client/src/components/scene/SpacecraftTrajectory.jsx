@@ -170,6 +170,7 @@ export const SpacecraftTrajectory = () => {
   const travelledGeoRef = useRef(null);
   const plannedGeoRef   = useRef(null);
   const flowMatRef      = useRef(null);
+  const plannedMatRef   = useRef(null);
 
   const travelledBuf = useRef(new Float32Array(maxPts * 3));
   const plannedBuf   = useRef(new Float32Array(maxPts * 3));
@@ -177,6 +178,7 @@ export const SpacecraftTrajectory = () => {
   const plannedDistBuf   = useRef(new Float32Array(maxPts));
   const lastEarthDistRef = useRef(-UPDATE_THRESHOLD_KM * 2);
   const lastTrajectoryCountRef = useRef(0);
+  const lastClosestApproachRef = useRef(false);
 
   const { travelledLine, plannedLine } = useMemo(() => {
     const tGeo    = new THREE.BufferGeometry();
@@ -208,6 +210,7 @@ export const SpacecraftTrajectory = () => {
       gapSize:     4,
       linewidth:   1,
     });
+    plannedMatRef.current = pMat;
 
     return {
       travelledLine: new THREE.Line(tGeo, tMat),
@@ -235,12 +238,35 @@ export const SpacecraftTrajectory = () => {
     const phaseId     = tel.phaseId || 'launch';
     const trajectoryVectors = tel?.trajectoryVectors?.spacecraft ?? [];
     const trajectoryCount = Array.isArray(trajectoryVectors) ? trajectoryVectors.length : 0;
+    const isClosestApproach = moonDistKm < 9_500 && moonDistKm > 0;
 
     if (flowMatRef.current) {
       flowMatRef.current.uniforms.uTime.value = state.clock.elapsedTime;
     }
-    if (plannedLine && plannedLine.material) {
-      plannedLine.material.dashOffset -= 0.08; // Pulse forward with energy
+
+    // Closest approach trajectory pulse effect — only update on state change
+    if (plannedMatRef.current) {
+      if (isClosestApproach && !lastClosestApproachRef.current) {
+        // Entering closest approach
+        plannedMatRef.current.color.setHex(0xFF0000); // Bright red
+        plannedMatRef.current.needsUpdate = true;
+        lastClosestApproachRef.current = true;
+      } else if (!isClosestApproach && lastClosestApproachRef.current) {
+        // Exiting closest approach
+        plannedMatRef.current.color.setHex(0xFC3D21); // Normal red
+        plannedMatRef.current.needsUpdate = true;
+        lastClosestApproachRef.current = false;
+      }
+
+      // Always update opacity and dash based on state
+      if (isClosestApproach) {
+        const pulseFactor = 0.5 + 0.5 * Math.sin(state.clock.elapsedTime * 3);
+        plannedMatRef.current.opacity = 0.4 + 0.6 * pulseFactor;
+        plannedMatRef.current.dashOffset -= 0.15; // Faster dash movement during approach
+      } else {
+        plannedMatRef.current.opacity = 0.7;
+        plannedMatRef.current.dashOffset -= 0.08; // Normal dash movement
+      }
     }
 
     const trajectoryChanged = trajectoryCount !== lastTrajectoryCountRef.current;
