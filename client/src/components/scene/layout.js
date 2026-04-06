@@ -23,11 +23,15 @@ export function getDistanceScaleFromTelemetry(telemetry) {
 
 export function kmVectorToScene(vecKm, distanceScale) {
   // Constrain objects to a single mission plane for a clear 2D-style map view.
-  // Keep X/Z from telemetry and flatten Y so Earth, Moon, and Orion share one pane.
+  // Horizons vectors are in ecliptic coordinates, so use X/Y as the map plane.
+  // Scene uses X/Z as its horizontal plane, so map:
+  //   telemetry X -> scene X
+  //   telemetry Y -> scene Z
+  // and flatten scene Y to keep everything on one pane.
   return new THREE.Vector3(
     vecKm.x * distanceScale,
     0,
-    vecKm.z * distanceScale
+    vecKm.y * distanceScale
   );
 }
 
