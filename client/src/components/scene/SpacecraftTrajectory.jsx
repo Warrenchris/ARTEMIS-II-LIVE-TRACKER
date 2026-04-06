@@ -23,7 +23,7 @@ import * as THREE            from 'three';
 
 const SCALE = 1 / 1000;
 const CURVE_POINTS = 160;
-const UPDATE_THRESHOLD_KM = 500;
+const UPDATE_THRESHOLD_KM = 10;
 const EARTH_R = 6.371;
 const MOON_R = 1.737;
 
@@ -167,6 +167,7 @@ export const SpacecraftTrajectory = () => {
   const travelledDistBuf = useRef(new Float32Array(maxPts));
   const plannedDistBuf   = useRef(new Float32Array(maxPts));
   const lastEarthDistRef = useRef(-UPDATE_THRESHOLD_KM * 2);
+  const lastTrajectoryCountRef = useRef(0);
 
   const { travelledLine, plannedLine } = useMemo(() => {
     const tGeo    = new THREE.BufferGeometry();
@@ -222,6 +223,7 @@ export const SpacecraftTrajectory = () => {
     const earthDistKm = parseFloat(tel.distanceFromEarthKm) || 0;
     const moonDistKm  = parseFloat(tel.distanceToMoonKm)    || 384400;
     const phaseId     = tel.phaseId || 'launch';
+    const trajectoryCount = Array.isArray(tel.trajectoryVectors) ? tel.trajectoryVectors.length : 0;
 
     if (flowMatRef.current) {
       flowMatRef.current.uniforms.uTime.value = state.clock.elapsedTime;
@@ -230,7 +232,10 @@ export const SpacecraftTrajectory = () => {
       plannedLine.material.dashOffset -= 0.08; // Pulse forward with energy
     }
 
-    if (Math.abs(earthDistKm - lastEarthDistRef.current) < UPDATE_THRESHOLD_KM) return;
+    const trajectoryChanged = trajectoryCount !== lastTrajectoryCountRef.current;
+    if (!trajectoryChanged && Math.abs(earthDistKm - lastEarthDistRef.current) < UPDATE_THRESHOLD_KM) return;
+
+    lastTrajectoryCountRef.current = trajectoryCount;
     lastEarthDistRef.current = earthDistKm;
 
     let scPos = new THREE.Vector3(
@@ -265,10 +270,12 @@ export const SpacecraftTrajectory = () => {
     const progress = total > 0 ? Math.min(1, earthDistKm / total) : 0;
 
     let curve;
+    let hasLiveTrajectoryVectors = false;
     if (tel.trajectoryVectors && tel.trajectoryVectors.length >= 2) {
       // Pure JPL Physics trajectory!
       const vectors = tel.trajectoryVectors.map(v => new THREE.Vector3(v.x * SCALE, v.y * SCALE, v.z * SCALE));
       curve = new THREE.CatmullRomCurve3(vectors, false, 'catmullrom');
+      hasLiveTrajectoryVectors = true;
     } else {
       // Fallback Algorithm
       curve = buildFreeReturnCurve(scPos, phaseId, progress, currentMoonNode);
@@ -276,11 +283,25 @@ export const SpacecraftTrajectory = () => {
 
     const scT = findCurveT(curve, scPos);
 
-    const numTravelled = Math.max(2, Math.round(scT       * CURVE_POINTS));
-    const numPlanned   = Math.max(2, Math.round((1 - scT) * CURVE_POINTS));
+    let numTravelled = Math.max(2, Math.round(scT * CURVE_POINTS));
+    let numPlanned = Math.max(2, Math.round((1 - scT) * CURVE_POINTS));
+    let travelledStartT = 0;
+    let travelledEndT = scT;
+    let plannedStartT = scT;
+    let plannedEndT = 1;
 
-    fillBuffer(travelledBuf.current, curve, 0,   scT, numTravelled);
-    fillBuffer(plannedBuf.current,   curve, scT, 1,   numPlanned);
+    // For live JPL vectors, render the full path so trajectory is always visible.
+    if (hasLiveTrajectoryVectors) {
+      numTravelled = 2;
+      numPlanned = CURVE_POINTS;
+      travelledStartT = 0;
+      travelledEndT = 0.001;
+      plannedStartT = 0;
+      plannedEndT = 1;
+    }
+
+    fillBuffer(travelledBuf.current, curve, travelledStartT, travelledEndT, numTravelled);
+    fillBuffer(plannedBuf.current, curve, plannedStartT, plannedEndT, numPlanned);
 
     {
       const buf = travelledDistBuf.current;

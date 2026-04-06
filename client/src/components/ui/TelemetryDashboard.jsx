@@ -249,6 +249,18 @@ export const TelemetryDashboard = () => {
           <span className="text-[10px] text-gray-600 tracking-widest uppercase">DATA LINK: DSN</span>
           <ConnectionBadge state={telemetry.isOcculted ? 'OFFLINE' : telemetry.connectionState} />
         </div>
+
+        {/* Trajectory legend */}
+        <div className="mt-3 pt-3 border-t border-white/10 flex items-center gap-4 text-[10px] uppercase tracking-widest text-gray-400 relative z-10">
+          <div className="flex items-center gap-2">
+            <span className="inline-block w-5 h-[2px] bg-[#00f2ff] shadow-[0_0_6px_rgba(0,242,255,0.8)]" />
+            <span>Traveled</span>
+          </div>
+          <div className="flex items-center gap-2">
+            <span className="inline-block w-5 h-[2px] bg-nasa-red" />
+            <span>Planned</span>
+          </div>
+        </div>
       </div>
     </motion.div>
   );

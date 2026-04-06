@@ -89,14 +89,13 @@ export const Spacecraft = () => {
         <meshStandardMaterial color="#555566" roughness={0.6} metalness={0.9} />
       </mesh>
 
-    {/* Engine Glow Removed for True Blackout Realism */}
-
-      {/* ── Visual Locator (Always visible) ── */}
-      <Html center zIndexRange={[100, 0]}>
-        <div className="w-16 h-16 rounded-full border border-nasa-blue/40 flex items-center justify-center pointer-events-none transition-transform scale-[2] origin-center">
-          <div className="w-2.5 h-2.5 rounded-full bg-white shadow-[0_0_12px_#4db8ff]"></div>
+      {/* ── Compact red identification glow ── */}
+      <Html center zIndexRange={[80, 0]}>
+        <div className="w-5 h-5 rounded-full border border-red-500/70 flex items-center justify-center pointer-events-none">
+          <div className="w-1.5 h-1.5 rounded-full bg-red-500 shadow-[0_0_10px_rgba(239,68,68,0.95)] animate-pulse" />
         </div>
       </Html>
+
     </group>
   );
 };

@@ -51,12 +51,28 @@ const MilestoneNode = ({ milestone, isActive, isPassed, index }) => {
 };
 
 export const MissionTimeline = React.memo(() => {
-  const { phaseId } = useTelemetry();
+  const { phaseId, distanceToMoonKm } = useTelemetry();
 
   const activeIndex = useMemo(() => {
-    const idx = PHASES.findIndex(p => p.id === phaseId);
+    const livePhaseAlias = {
+      deep_space_transit: 'transit',
+      lunar_influence: 'flyby',
+      gravity_assist_active: 'flyby',
+    };
+
+    const normalizedPhaseId = livePhaseAlias[phaseId] ?? phaseId;
+    const idx = PHASES.findIndex(p => p.id === normalizedPhaseId);
+    if (idx !== -1) return idx;
+
+    // Distance-derived fallback for unrecognized live labels.
+    const moonDist = parseFloat(distanceToMoonKm);
+    if (Number.isFinite(moonDist) && moonDist > 0) {
+      if (moonDist < 60_000) return PHASES.findIndex((p) => p.id === 'flyby');
+      return PHASES.findIndex((p) => p.id === 'transit');
+    }
+
     return idx === -1 ? 0 : idx;
-  }, [phaseId]);
+  }, [phaseId, distanceToMoonKm]);
 
   const progressPct = useMemo(() =>
     PHASES.length <= 1 ? 0 : (activeIndex / (PHASES.length - 1)) * 100,
