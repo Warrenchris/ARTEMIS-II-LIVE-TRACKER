@@ -20,7 +20,6 @@ import React, { useRef, useMemo, useEffect } from 'react';
 import { useFrame }          from '@react-three/fiber';
 import { useTelemetryRef }   from '../../contexts/TelemetryContext';
 import * as THREE            from 'three';
-import { getMoonPositionAtTime } from './MoonOrbit';
 
 const SCALE = 1 / 1000;
 const CURVE_POINTS = 160;
@@ -106,7 +105,7 @@ function makeFlowMaterial() {
     uniforms: {
       uTime:      { value: 0 },
       uColor:     { value: new THREE.Color('#00f2ff') },
-      uOpacity:   { value: 0.55 },
+      uOpacity:   { value: 0.9 },
       uDashSize:  { value: 6.0 },
       uGapSize:   { value: 4.0 },
       uFlowSpeed: { value: 4.5 },   
@@ -148,6 +147,7 @@ function makeFlowMaterial() {
       }
     `,
     transparent:  true,
+    depthTest:    false,
     depthWrite:   false,
     blending:     THREE.AdditiveBlending,
     linewidth:    1,            
@@ -192,7 +192,8 @@ export const SpacecraftTrajectory = () => {
     const pMat = new THREE.LineDashedMaterial({
       color:       '#FC3D21',
       transparent: true,
-      opacity:     0.30,
+      opacity:     0.7,
+      depthTest:   false,
       dashSize:    4,
       gapSize:     4,
       linewidth:   1,
@@ -221,7 +222,6 @@ export const SpacecraftTrajectory = () => {
     const earthDistKm = parseFloat(tel.distanceFromEarthKm) || 0;
     const moonDistKm  = parseFloat(tel.distanceToMoonKm)    || 384400;
     const phaseId     = tel.phaseId || 'launch';
-    const metH        = parseFloat(tel.missionElapsedHours) || 0;
 
     if (flowMatRef.current) {
       flowMatRef.current.uniforms.uTime.value = state.clock.elapsedTime;
@@ -233,18 +233,32 @@ export const SpacecraftTrajectory = () => {
     if (Math.abs(earthDistKm - lastEarthDistRef.current) < UPDATE_THRESHOLD_KM) return;
     lastEarthDistRef.current = earthDistKm;
 
-    const currentMoonNode = getMoonPositionAtTime(metH);
-
     let scPos = new THREE.Vector3(
       (tel.position?.x || 0) * SCALE,
       (tel.position?.y || 0) * SCALE,
       (tel.position?.z || 0) * SCALE
     );
 
+    const moonPosData = tel.moonPosition;
+    let currentMoonNode = null;
+    if (moonPosData && (moonPosData.x !== 0 || moonPosData.y !== 0 || moonPosData.z !== 0)) {
+      currentMoonNode = new THREE.Vector3(
+        moonPosData.x * SCALE,
+        moonPosData.y * SCALE,
+        moonPosData.z * SCALE
+      );
+    }
+
     // Force geometric tracing (fallback if backend 0,0,-Z static states are still live)
     if (Math.abs(scPos.x) < 0.1 && Math.abs(scPos.y) < 0.1 && scPos.z < 0) {
+      const fallbackMoon = currentMoonNode ?? new THREE.Vector3(moonDistKm * SCALE, 0, 0);
       const t  = Math.min(1, earthDistKm / (earthDistKm + moonDistKm));
-      scPos = EARTH_POS.clone().lerp(currentMoonNode, t);
+      scPos = EARTH_POS.clone().lerp(fallbackMoon, t);
+    }
+
+    if (!currentMoonNode) {
+      const dir = scPos.lengthSq() > 0 ? scPos.clone().normalize() : new THREE.Vector3(1, 0, 0);
+      currentMoonNode = dir.multiplyScalar((earthDistKm + moonDistKm) * SCALE);
     }
 
     const total    = earthDistKm + moonDistKm;

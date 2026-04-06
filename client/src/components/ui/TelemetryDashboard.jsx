@@ -224,7 +224,7 @@ export const TelemetryDashboard = () => {
           </StatRow>
 
           <StatRow icon={<Zap size={14} />} label="Relative Velocity">
-            <LiveMetric value={telemetry.speedKmS} decimals={2} isOcculted={telemetry.isOcculted} unit="km/s" />
+            <LiveMetric value={telemetry.relativeVelocityKmH ?? 0} decimals={1} isOcculted={telemetry.isOcculted} unit="km/h" />
           </StatRow>
 
           <StatRow icon={<Clock size={14} />} label="Mission Elapsed Time">

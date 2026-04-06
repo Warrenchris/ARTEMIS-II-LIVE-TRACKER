@@ -46,12 +46,15 @@ const DEFAULT_TELEMETRY = Object.freeze({
   speedKmS:               '0.000',
   altitudeKm:             '0',
   relativeVelocityKmS:    null,   // km/s relative to Moon's centre of mass
+  relativeVelocityKmH:    null,   // km/h relative to Moon
   phaseId:                'launch',
   phase:                  'Pre-launch',
   position:               { x: 0, y: 0, z: 0 },
-  telemetryHealth:        'NOMINAL',
+  moonPosition:           { x: 0, y: 0, z: 0 },
+  telemetryHealth:        'DATA_LINK_FAILURE',
   dataSource:             'UNKNOWN',    // 'NASA_DSN' | 'JPL_HORIZONS' | 'PREDICTED_MODEL'
   dsnLinkActive:          false,        // true when DSN antenna is actively tracking Orion
+  dsnSignalLoss:          true,
   statusLabel:            'CONNECTING', // derived label for the UI status badge
   commsLatencyMs:         0,
   connectionState:        CONNECTION_STATES.CONNECTING,
@@ -166,52 +169,34 @@ export const TelemetryProvider = ({ children }) => {
     // ── Telemetry data ────────────────────────────────────────────────────────
 
     socket.on('telemetry_update', (data) => {
+      if (data === null) {
+        mergeTelemetry({
+          timestamp: new Date().toISOString(),
+          telemetryHealth: 'DATA_LINK_FAILURE',
+          dataSource: 'NONE',
+          isLive: false,
+          statusLabel: 'DATA_LINK_FAILURE',
+          connectionState: CONNECTION_STATES.SYNCED,
+        });
+        return;
+      }
+
       const now = Date.now();
 
       // Derive a human-readable status label for the HUD badge.
       // Priority: LIVE (DSN ranging / Horizons vectors) → PREDICTED → error states
-      let statusLabel;
-      if (data.telemetryHealth === 'NOMINAL') {
-        if (data.dataSource === 'NASA_DSN') {
-          // Primary source: confirmed-live DSN ranging data
-          statusLabel = 'LIVE TELEMETRY (NASA DSN)';
-        } else if (data.dataSource === 'JPL_HORIZONS') {
-          statusLabel = data.dsnLinkActive
-            ? 'LIVE TELEMETRY (NASA DSN)'
-            : 'LIVE TELEMETRY (JPL HORIZONS)';
-        } else {
-          statusLabel = 'LIVE TELEMETRY';
-        }
-      } else if (data.telemetryHealth === 'PREDICTED') {
-        statusLabel = 'PREDICTED';
-      } else if (data.telemetryHealth === 'DEGRADED') {
-        statusLabel = 'DEGRADED SIGNAL';
-      } else if (data.telemetryHealth === 'STALE') {
-        statusLabel = 'STALE DATA';
-      } else {
-        statusLabel = data.telemetryHealth ?? 'UNKNOWN';
+      let statusLabel = data.telemetryHealth ?? 'UNKNOWN';
+      if (data.telemetryHealth === 'NOMINAL' && data.dataSource === 'JPL_HORIZONS') {
+        statusLabel = data.phase || 'LIVE TELEMETRY';
       }
 
-      // ── Physics Override Heuristics ──
-      let speedStr = data.speedKmS;
+      const earthDist = parseFloat(data.distanceFromEarthKm) || 0;
       const moonDist = parseFloat(data.distanceToMoonKm) || 0;
+      const dsnSignalLoss = data.dsnSignalLoss === true;
       // Calculate geometric occultation (behind moon line-of-sight from Earth)
       // Restricted purely to physics-math threshold so live telemetry flows normally until the eclipse is geometrically true.
-      const isOcculted = (earthDist > 384400 && moonDist < 15000);
-
-      // Quadratic velocity curve boosting towards 2.1 near periapsis
-      if (moonDist < 40000 && moonDist > 0) {
-        const baseV = parseFloat(speedStr) || 1.41;
-        const periapsis = 7600; // Expected flyby alt
-        const limitV = 2.100;
-        if (moonDist <= periapsis) {
-          speedStr = limitV.toFixed(3);
-        } else {
-          const fraction = Math.max(0, Math.min(1, (40000 - moonDist) / (40000 - periapsis)));
-          const mappedV = baseV + (limitV - baseV) * (fraction * fraction);
-          speedStr = mappedV.toFixed(3);
-        }
-      }
+      const geometricOcculted = (earthDist > 384400 && moonDist < 15000);
+      const isOcculted = dsnSignalLoss || geometricOcculted;
 
       setTelemetry((prev) => {
         // Append current live vector to the path array to avoid gaps
@@ -224,9 +209,8 @@ export const TelemetryProvider = ({ children }) => {
         const next = {
           ...prev,
           ...data,
-          speedKmS:        speedStr,
           lastUpdated:     now,
-          isLive:          data.telemetryHealth !== 'PREDICTED',
+          isLive:          data.telemetryHealth === 'NOMINAL',
           statusLabel,
           connectionState: CONNECTION_STATES.SYNCED,
           isOcculted,

@@ -17,9 +17,9 @@
  *      → Object -1024 = Orion / Artemis II.
  *      → Returns high-precision state vectors (position + velocity) in the
  *        ECLIPTIC J2000 frame, relative to Earth's geocentre (centre=500@399).
- *      → CRITICAL FIX: Parameters must NOT be wrapped in single-quotes when
- *        passed via the query-string; axios serialises them as URL components.
- *        Quoting is only needed in the telnet / batch-file interface.
+ *      → CRITICAL FIX: Use the current REST format expected by Horizons v1.2:
+ *        `format=text`, calendar timestamps (`YYYY-MM-DD HH:MM` UTC), and
+ *        quoted literal values (e.g., COMMAND='-1024').
  *
  *   3. High-fidelity PREDICTED model (always succeeds)
  *      → Physics-based trajectory segments derived from the published NASA
@@ -45,13 +45,6 @@
 const axios  = require('axios');
 const logger = require('../utils/logger');
 
-// ─── Launch epoch ─────────────────────────────────────────────────────────────
-// Artemis II launched April 1, 2026 at 18:00:00 UTC.
-
-const LAUNCH_DATE = new Date(
-  process.env.ARTEMIS_LAUNCH_DATE || '2026-04-01T18:00:00.000Z'
-);
-
 // ─── Constants ────────────────────────────────────────────────────────────────
 
 const POLL_INTERVAL_MS = Math.max(
@@ -59,15 +52,7 @@ const POLL_INTERVAL_MS = Math.max(
   parseInt(process.env.TELEMETRY_POLL_INTERVAL_MS, 10) || 10_000
 );
 
-// Physical constants
-const MOON_DISTANCE_KM = 384_400;   // mean Earth-Moon center-to-center (km)
-const EARTH_RADIUS_KM  =   6_371;   // km
-const MOON_RADIUS_KM   =   1_737;   // km
-const SPEED_OF_LIGHT   = 299_792.458; // km/s
-
-// Stale-data gate — flyby window (Flight Days 5-7, MET 96-168 h)
-// Any source reporting Moon distance > this threshold is rejected as stale.
-const STALE_MOON_THRESHOLD_KM = 50_000;
+const SPEED_OF_LIGHT = 299_792.458; // km/s
 
 // ─── Source URLs ──────────────────────────────────────────────────────────────
 
@@ -85,6 +70,16 @@ const DSN_XML_URL   = 'https://eyes.nasa.gov/dsn/data/dsn.xml';
 const HORIZONS_BASE = 'https://ssd.jpl.nasa.gov/api/horizons.api';
 
 const REQUEST_TIMEOUT  = 14_000; // ms
+const MOON_DISTANCE_STALE_LIMIT_KM = Number(process.env.MOON_DISTANCE_STALE_LIMIT_KM || '50000');
+
+function toHorizonsDateTime(date) {
+  const pad = (n) => String(n).padStart(2, '0');
+  return `${date.getUTCFullYear()}-${pad(date.getUTCMonth() + 1)}-${pad(date.getUTCDate())} ${pad(date.getUTCHours())}:${pad(date.getUTCMinutes())}`;
+}
+
+function horizonsLiteral(value) {
+  return `'${value}'`;
+}
 
 // ─── Shared HTTP headers ──────────────────────────────────────────────────────
 // NASA/JPL CDNs throttle or block requests without a proper User-Agent.
@@ -97,38 +92,19 @@ const COMMON_HEADERS = {
   'Pragma':          'no-cache',
 };
 
-// ─── Mission Phase Definitions ────────────────────────────────────────────────
-
-const PHASES = [
-  { id: 'launch',      label: 'Launch & Ascent',        minKm: 0,         maxKm: 400       },
-  { id: 'earth_orbit', label: 'Earth Orbit',             minKm: 400,       maxKm: 8_000     },
-  { id: 'tli',         label: 'Translunar Injection',    minKm: 8_000,     maxKm: 70_000    },
-  { id: 'transit',     label: 'Lunar Transit',           minKm: 70_000,    maxKm: 335_000   },
-  { id: 'approach',    label: 'Lunar Approach',          minKm: 335_000,   maxKm: 375_000   },
-  { id: 'flyby',       label: 'Lunar Flyby',             minKm: 375_000,   maxKm: 392_000   },
-  { id: 'return',      label: 'Return Trajectory',       minKm: 392_000,   maxKm: 1_000_000 },
-  { id: 'splashdown',  label: 'Splashdown',              minKm: -Infinity, maxKm: -2        },
-];
-
-function resolvePhase(earthDistKm, moonDistKm) {
-  // Flyby override when very close to the Moon regardless of Earth distance
-  if (moonDistKm !== undefined && moonDistKm < 50_000) {
-    return PHASES.find((p) => p.id === 'flyby');
+function resolveAutonomousPhase(moonDistKm, speedKmS, trendState) {
+  if (
+    trendState?.previousMoonDistKm !== null &&
+    trendState?.previousSpeedKmS !== null &&
+    moonDistKm < trendState.previousMoonDistKm &&
+    speedKmS > trendState.previousSpeedKmS
+  ) {
+    return { id: 'gravity_assist_active', label: 'GRAVITY_ASSIST_ACTIVE' };
   }
-  return (
-    PHASES.find((p) => earthDistKm >= p.minKm && earthDistKm < p.maxKm) ||
-    PHASES[PHASES.length - 1]
-  );
-}
-
-function missionElapsedHours() {
-  return Math.max(0, (Date.now() - LAUNCH_DATE.getTime()) / 3_600_000);
-}
-
-/** Returns true during the lunar flyby window (MET 96–168 h, Flight Days 5-7). */
-function isFlybyWindow() {
-  const metH = missionElapsedHours();
-  return metH >= 96 && metH <= 168;
+  if (moonDistKm < 60_000) {
+    return { id: 'lunar_influence', label: 'LUNAR_INFLUENCE' };
+  }
+  return { id: 'deep_space', label: 'DEEP_SPACE_TRANSIT' };
 }
 
 // ─── Telemetry Normaliser ─────────────────────────────────────────────────────
@@ -151,42 +127,38 @@ function isFlybyWindow() {
  * @returns {object} Canonical telemetry packet
  */
 function normalise(
-  { earthDistKm, moonDistKm, speedKmS, relVelKmS, dsnLinkActive = false, x = 0, y = 0, z = 0 },
-  healthOverride = 'NOMINAL',
+  { earthDistKm, moonDistKm, speedKmS, relVelKmS, dsnLinkActive = false, dsnSignalLoss = false, x = 0, y = 0, z = 0, moonX = 0, moonY = 0, moonZ = 0 },
+  phase,
   dataSource = 'UNKNOWN'
 ) {
   const safeEarth = Math.max(0, earthDistKm);
   const safeMoon  = Math.max(0, moonDistKm);
-  const metH      = missionElapsedHours();
-  const phase     = resolvePhase(safeEarth, safeMoon);
 
   // Round-trip signal delay Earth→spacecraft→Earth (ms)
   const commsLatencyMs = Math.round((safeEarth / SPEED_OF_LIGHT) * 1_000 * 2);
 
-  // Altitude above Earth's surface
-  const altitudeKm = Math.max(0, safeEarth - EARTH_RADIUS_KM);
-
   // Relative velocity vs Moon (provided by Horizons or estimated)
   const relVel = relVelKmS !== undefined ? relVelKmS : null;
-
-  // Flight day (integer, 1-based)
-  const flightDay = Math.floor(metH / 24) + 1;
+  const relVelKmH = relVel !== null ? relVel * 3600 : null;
 
   return {
     timestamp:             new Date().toISOString(),
-    missionElapsedHours:   metH.toFixed(2),
-    flightDay,
+    missionElapsedHours:   null,
+    flightDay:             null,
     distanceFromEarthKm:   safeEarth.toFixed(0),
     distanceToMoonKm:      safeMoon.toFixed(0),
     speedKmS:              speedKmS.toFixed(3),
-    altitudeKm:            altitudeKm.toFixed(0),
+    altitudeKm:            null,
     relativeVelocityKmS:   relVel !== null ? relVel.toFixed(3) : null,
+    relativeVelocityKmH:   relVelKmH !== null ? relVelKmH.toFixed(1) : null,
     phaseId:               phase.id,
     phase:                 phase.label,
     position: { x, y, z },
-    telemetryHealth:       healthOverride,
+    moonPosition: { x: moonX, y: moonY, z: moonZ },
+    telemetryHealth:       'NOMINAL',
     dataSource,
     dsnLinkActive,
+    dsnSignalLoss,
     commsLatencyMs,
   };
 }
@@ -403,10 +375,12 @@ async function fetchFromDSN(state) {
   const relVelKmS = computeRelativeVelocity(speedKmS, earthDistKm, new Date());
 
   // ── Stale validation ─────────────────────────────────────────────────
-  if (isFlybyWindow() && moonDistKm > STALE_MOON_THRESHOLD_KM) {
+  const metH = missionElapsedHours();
+  const staleThreshold = staleMoonThresholdKmForMet(metH);
+  if (moonDistKm > staleThreshold) {
     throw new Error(
       `DSN stale-guard: moonDist=${moonDistKm.toFixed(0)} km exceeds ` +
-      `${STALE_MOON_THRESHOLD_KM} km during flyby window — check ephemeris`
+      `${staleThreshold} km at MET ${metH.toFixed(2)} h — check ephemeris`
     );
   }
 
@@ -423,39 +397,30 @@ async function fetchFromDSN(state) {
  * Queries the JPL Horizons REST API for Orion (object -1024) returning state
  * vectors relative to Earth's geocentre.
  *
- * CRITICAL PARAMETER FIX (bug in v3):
- *   The Horizons REST API parameters must NOT be wrapped in single quotes.
- *   Quoting is only required for the Telnet/batch-file interface.
- *   When axios serialises { COMMAND: "'-1024'" } it results in
- *   COMMAND=%27-1024%27 which the REST API rejects with HTTP 400.
- *   Correct form: { COMMAND: '-1024' } → COMMAND=-1024 (URL-encoded).
+ * CRITICAL PARAMETER FIX:
+ *   Horizons API v1.2 rejects several legacy vector parameters and accepts
+ *   `format=text` requests with quoted literals and calendar-style times.
+ *   Example accepted form:
+ *   COMMAND='-1024'&START_TIME='2026-04-06 09:08'&STEP_SIZE='1 m'
  *
  * @param {boolean} dsnLinkActive
  * @returns {Promise<object>} Canonical telemetry payload tagged NOMINAL
  * @throws  {Error}           If Horizons is unreachable or unparseable
  */
-async function fetchFromHorizons(dsnLinkActive) {
-  const now   = new Date();
-  const start = new Date(now.getTime() - 60_000);  // -1 min
-  const stop  = new Date(now.getTime() + 60_000);  // +1 min
-
-  // ── FIXED: No single-quotes around values for REST API ──────────────
+async function fetchHorizonsBody(command, start, stop, stepSize = '1 m') {
   const params = {
-    format:     'json',
-    COMMAND:    '-1024',        // Orion / Artemis II — NO quotes
-    OBJ_DATA:   'NO',
-    MAKE_EPHEM: 'YES',
-    EPHEM_TYPE: 'VECTORS',
-    CENTER:     '500@399',      // Earth geocentre — NO quotes
-    START_TIME: start.toISOString(),
-    STOP_TIME:  stop.toISOString(),
-    STEP_SIZE:  '1m',
-    OUT_UNITS:  'KM-S',
-    REF_PLANE:  'ECLIPTIC',
-    REF_SYSTEM: 'J2000',
-    VECT_CORR:  'NONE',
-    VEC_LABELS: 'YES',
-    CSV_FORMAT: 'NO',
+    format:     'text',
+    COMMAND:    horizonsLiteral(command),
+    MAKE_EPHEM: horizonsLiteral('YES'),
+    OBJ_DATA:   horizonsLiteral('NO'),
+    EPHEM_TYPE: horizonsLiteral('VECTORS'),
+    CENTER:     horizonsLiteral('500@399'),
+    START_TIME: horizonsLiteral(toHorizonsDateTime(start)),
+    STOP_TIME:  horizonsLiteral(toHorizonsDateTime(stop)),
+    STEP_SIZE:  horizonsLiteral(stepSize),
+    OUT_UNITS:  horizonsLiteral('KM-S'),
+    REF_PLANE:  horizonsLiteral('ECLIPTIC'),
+    REF_SYSTEM: horizonsLiteral('J2000'),
   };
 
   const response = await axios.get(HORIZONS_BASE, {
@@ -465,92 +430,89 @@ async function fetchFromHorizons(dsnLinkActive) {
     validateStatus: (s) => s >= 200 && s < 300,
   });
 
-  // Horizons can return HTTP 200 with an error in the body
   const body = typeof response.data === 'object'
     ? (response.data?.result ?? JSON.stringify(response.data))
     : String(response.data);
-
-  if (!body) {
-    throw new Error('Horizons: empty response body');
+  if (!body || body.includes('ERROR') || body.includes('No ephemeris')) {
+    throw new Error(`Horizons API error for ${command}: ${String(body).slice(0, 300)}`);
   }
 
-  // Detect API-level errors (e.g. "Ambiguous spacecraft ID")
-  if (body.includes('ERROR') || body.includes('No ephemeris')) {
-    throw new Error(`Horizons API error: ${body.slice(0, 300)}`);
-  }
-
-  // ── Parse vector table between $$SOE / $$EOE markers ────────────────
   const soeIdx = body.indexOf('$$SOE');
   const eoeIdx = body.indexOf('$$EOE');
   if (soeIdx === -1 || eoeIdx === -1) {
-    throw new Error(
-      `Horizons: SOE/EOE markers missing. Preview: ${body.slice(0, 300)}`
-    );
+    throw new Error(`Horizons: missing SOE/EOE for ${command}`);
   }
 
-  const tableText = body.slice(soeIdx + 5, eoeIdx).trim();
-  const lines     = tableText.split('\n').map((l) => l.trim()).filter(Boolean);
-  if (lines.length < 3) {
-    throw new Error(`Horizons: insufficient table rows. Got: ${JSON.stringify(lines)}`);
-  }
+  const lines = body.slice(soeIdx + 5, eoeIdx).trim().split('\n').map((l) => l.trim()).filter(Boolean);
+  if (lines.length < 3) throw new Error(`Horizons: insufficient vector rows for ${command}`);
 
-  // Lines[0] — epoch line:  "2460702.500000000 = A.D. 2026-Apr-06 ..."
-  // Lines[1] — position:    " X = -1.23E+05   Y =  2.34E+05   Z = ..."
-  // Lines[2] — velocity:    " VX= -1.23E+00   VY=  2.34E+00   VZ= ..."
-  const posLine = lines[1];
-  const posMatch = posLine.match(
+  const posMatch = lines[1].match(
     /X\s*=\s*([-+]?\d+(?:\.\d+)?(?:[eE][-+]?\d+)?)\s+Y\s*=\s*([-+]?\d+(?:\.\d+)?(?:[eE][-+]?\d+)?)\s+Z\s*=\s*([-+]?\d+(?:\.\d+)?(?:[eE][-+]?\d+)?)/i
   );
-  if (!posMatch) {
-    throw new Error(`Horizons: cannot parse position line: "${posLine}"`);
-  }
-
-  const X = parseFloat(posMatch[1]);
-  const Y = parseFloat(posMatch[2]);
-  const Z = parseFloat(posMatch[3]);
-
-  const velLine = lines[2];
-  const velMatch = velLine.match(
+  const velMatch = lines[2].match(
     /VX\s*=\s*([-+]?\d+(?:\.\d+)?(?:[eE][-+]?\d+)?)\s+VY\s*=\s*([-+]?\d+(?:\.\d+)?(?:[eE][-+]?\d+)?)\s+VZ\s*=\s*([-+]?\d+(?:\.\d+)?(?:[eE][-+]?\d+)?)/i
   );
-  if (!velMatch) {
-    throw new Error(`Horizons: cannot parse velocity line: "${velLine}"`);
-  }
+  if (!posMatch || !velMatch) throw new Error(`Horizons: unparseable vectors for ${command}`);
 
-  const VX = parseFloat(velMatch[1]);
-  const VY = parseFloat(velMatch[2]);
-  const VZ = parseFloat(velMatch[3]);
+  return {
+    x: parseFloat(posMatch[1]),
+    y: parseFloat(posMatch[2]),
+    z: parseFloat(posMatch[3]),
+    vx: parseFloat(velMatch[1]),
+    vy: parseFloat(velMatch[2]),
+    vz: parseFloat(velMatch[3]),
+  };
+}
 
-  // ── Compute distances ────────────────────────────────────────────────
-  const earthDistKm = Math.sqrt(X * X + Y * Y + Z * Z);
+async function fetchFromHorizons(dsnLinkActive, trendState) {
+  const now = new Date();
+  const start = new Date(now.getTime() - 60_000);
+  const stop = new Date(now.getTime() + 60_000);
 
-  const moonPos    = moonGeocentricKm(now);
-  const dMX = X - moonPos.x;
-  const dMY = Y - moonPos.y;
-  const dMZ = Z - moonPos.z;
-  const moonDistKm = Math.sqrt(dMX * dMX + dMY * dMY + dMZ * dMZ);
+  const [orion, moon] = await Promise.all([
+    fetchHorizonsBody('-1024', start, stop, '1 m'),
+    fetchHorizonsBody('301', start, stop, '1 m'),
+  ]);
 
-  const speedKmS  = Math.sqrt(VX * VX + VY * VY + VZ * VZ);
-
-  // Relative velocity vs Moon (spacecraft vel - Moon vel)
-  const moonVel   = moonVelocityKmS(now);
+  const earthDistKm = Math.sqrt(orion.x ** 2 + orion.y ** 2 + orion.z ** 2);
+  const moonDistKm = Math.sqrt(
+    (orion.x - moon.x) ** 2 +
+    (orion.y - moon.y) ** 2 +
+    (orion.z - moon.z) ** 2
+  );
+  const speedKmS = Math.sqrt(orion.vx ** 2 + orion.vy ** 2 + orion.vz ** 2);
   const relVelKmS = Math.sqrt(
-    (VX - moonVel.vx) ** 2 +
-    (VY - moonVel.vy) ** 2 +
-    (VZ - moonVel.vz) ** 2
+    (orion.vx - moon.vx) ** 2 +
+    (orion.vy - moon.vy) ** 2 +
+    (orion.vz - moon.vz) ** 2
   );
 
-  // ── Stale validation ─────────────────────────────────────────────────
-  if (isFlybyWindow() && moonDistKm > STALE_MOON_THRESHOLD_KM) {
+  if (moonDistKm > MOON_DISTANCE_STALE_LIMIT_KM) {
     throw new Error(
-      `Horizons stale-guard: moonDist=${moonDistKm.toFixed(0)} km ` +
-      `exceeds ${STALE_MOON_THRESHOLD_KM} km during flyby window`
+      `DATA_STALE: live moon distance ${moonDistKm.toFixed(0)} km exceeds ${MOON_DISTANCE_STALE_LIMIT_KM} km`
     );
   }
 
+  const phase = resolveAutonomousPhase(moonDistKm, speedKmS, trendState);
+  trendState.previousMoonDistKm = moonDistKm;
+  trendState.previousSpeedKmS = speedKmS;
+
   return normalise(
-    { earthDistKm, moonDistKm, speedKmS, relVelKmS, dsnLinkActive, x: X, y: Y, z: Z },
-    'NOMINAL',
+    {
+      earthDistKm,
+      moonDistKm,
+      speedKmS,
+      relVelKmS,
+      dsnLinkActive,
+      dsnSignalLoss: !dsnLinkActive,
+      x: orion.x,
+      y: orion.y,
+      z: orion.z,
+      moonX: moon.x,
+      moonY: moon.y,
+      moonZ: moon.z,
+    },
+    phase,
     'JPL_HORIZONS'
   );
 }
@@ -745,21 +707,18 @@ async function updateTrajectoryCache() {
     const stop  = new Date(now.getTime() + 48 * 3600_000);  // +48 hours
     
     const params = {
-      format:     'json',
-      COMMAND:    '-1024',
-      OBJ_DATA:   'NO',
-      MAKE_EPHEM: 'YES',
-      EPHEM_TYPE: 'VECTORS',
-      CENTER:     '500@399',
-      START_TIME: start.toISOString(),
-      STOP_TIME:  stop.toISOString(),
-      STEP_SIZE:  '1h',
-      OUT_UNITS:  'KM-S',
-      REF_PLANE:  'ECLIPTIC',
-      REF_SYSTEM: 'J2000',
-      VECT_CORR:  'NONE',
-      VEC_LABELS: 'NO',
-      CSV_FORMAT: 'YES',
+      format:     'text',
+      COMMAND:    horizonsLiteral('-1024'),
+      MAKE_EPHEM: horizonsLiteral('YES'),
+      OBJ_DATA:   horizonsLiteral('NO'),
+      EPHEM_TYPE: horizonsLiteral('VECTORS'),
+      CENTER:     horizonsLiteral('500@399'),
+      START_TIME: horizonsLiteral(toHorizonsDateTime(start)),
+      STOP_TIME:  horizonsLiteral(toHorizonsDateTime(stop)),
+      STEP_SIZE:  horizonsLiteral('1 h'),
+      OUT_UNITS:  horizonsLiteral('KM-S'),
+      REF_PLANE:  horizonsLiteral('ECLIPTIC'),
+      REF_SYSTEM: horizonsLiteral('J2000'),
     };
 
     const response = await axios.get(HORIZONS_BASE, { params, headers: COMMON_HEADERS, timeout: REQUEST_TIMEOUT });
@@ -769,26 +728,21 @@ async function updateTrajectoryCache() {
     const eoeIdx = body.indexOf('$$EOE');
     if (soeIdx !== -1 && eoeIdx !== -1) {
       const tableText = body.slice(soeIdx + 5, eoeIdx).trim();
-      const lines = tableText.split('\n');
-      
+      const lines = tableText.split('\n').map((line) => line.trim()).filter(Boolean);
       const parsedVectors = [];
       for (const line of lines) {
-        const parts = line.split(',').map(s => s.trim());
-        if (parts.length >= 5) {
-          // X, Y, Z are at indexes 2, 3, 4 typically in CSV format VECTORS
-          const x = parseFloat(parts[2]);
-          const y = parseFloat(parts[3]);
-          const z = parseFloat(parts[4]);
-          if (!isNaN(x) && !isNaN(y) && !isNaN(z)) {
-            parsedVectors.push({ x, y, z });
-          }
+        const posMatch = line.match(
+          /X\s*=\s*([-+]?\d+(?:\.\d+)?(?:[eE][-+]?\d+)?)\s+Y\s*=\s*([-+]?\d+(?:\.\d+)?(?:[eE][-+]?\d+)?)\s+Z\s*=\s*([-+]?\d+(?:\.\d+)?(?:[eE][-+]?\d+)?)/i
+        );
+        if (posMatch) {
+          const x = parseFloat(posMatch[1]);
+          const y = parseFloat(posMatch[2]);
+          const z = parseFloat(posMatch[3]);
+          parsedVectors.push({ x, y, z });
         }
       }
       
       if (parsedVectors.length > 0) {
-        // Apply Earth-center origin offset logic explicitly
-        const originRef = parsedVectors[0];
-        // Normalize the wobbles slightly across the massive vector map
         cachedTrajectory = parsedVectors;
         lastTrajectoryFetch = nowTime;
         logger.info(`Refreshed JPL Trajectory Array: ${cachedTrajectory.length} hourly vectors cached.`);
@@ -805,46 +759,18 @@ async function updateTrajectoryCache() {
 // Persists between poll cycles in the same process lifetime.
 // Used by fetchFromDSN to derive speed from range delta.
 
-const dsnState = {
-  prevRange:     null,
-  prevRangeTime: null,
+const trendState = {
+  previousMoonDistKm: null,
+  previousSpeedKmS: null,
 };
 
 // ─── Fetch orchestrator ───────────────────────────────────────────────────────
 
 /**
- * Tries each data source in order:
- *   1. NASA DSN XML   (live ranging — confirmed working April 2026)
- *   2. JPL Horizons   (state vectors — fixed parameter quoting)
- *   3. PREDICTED model (always succeeds)
- *
- * @returns {Promise<object>} Best available telemetry payload
+ * Live-only telemetry orchestrator.
+ * If live fetch fails, returns null and lets clients render link failure state.
  */
 async function fetchBestTelemetry() {
-
-  // ── Attempt 1: NASA DSN XML ──────────────────────────────────────────────
-  try {
-    const tel = await fetchFromDSN(dsnState);
-
-    logger.info('Telemetry from NASA DSN XML (live ranging)', {
-      earthDistKm:  tel.distanceFromEarthKm,
-      moonDistKm:   tel.distanceToMoonKm,
-      speedKmS:     tel.speedKmS,
-      relVelKmS:    tel.relativeVelocityKmS,
-      phase:        tel.phase,
-      dsnActive:    tel.dsnLinkActive,
-      commsDelayMs: tel.commsLatencyMs,
-    });
-
-    return tel;
-  } catch (dsnErr) {
-    logger.warn('DSN XML primary fetch failed — trying JPL Horizons', {
-      error: dsnErr.message,
-    });
-  }
-
-  // ── Attempt 2: JPL Horizons ──────────────────────────────────────────────
-  // Re-check DSN link status non-fatally for enrichment
   let dsnLinkActive = false;
   try {
     const dsnResp = await axios.get(DSN_XML_URL, {
@@ -858,7 +784,7 @@ async function fetchBestTelemetry() {
   } catch (_) { /* non-fatal */ }
 
   try {
-    const tel = await fetchFromHorizons(dsnLinkActive);
+    const tel = await fetchFromHorizons(dsnLinkActive, trendState);
 
     logger.info('Telemetry from JPL Horizons (state vectors)', {
       earthDistKm: tel.distanceFromEarthKm,
@@ -869,24 +795,11 @@ async function fetchBestTelemetry() {
 
     return tel;
   } catch (horizonsErr) {
-    logger.warn('JPL Horizons failed — falling back to PREDICTED model', {
+    logger.warn('Live telemetry unavailable — DATA_LINK_FAILURE', {
       error: horizonsErr.message,
     });
   }
-
-  // ── Fallback: High-fidelity PREDICTED model ───────────────────────────────
-  const fallback = buildPredicted(false);
-
-  logger.warn('Using PREDICTED telemetry (all live sources failed)', {
-    phase:       fallback.phase,
-    earthDistKm: fallback.distanceFromEarthKm,
-    moonDistKm:  fallback.distanceToMoonKm,
-    speedKmS:    fallback.speedKmS,
-    metH:        fallback.missionElapsedHours,
-    flightDay:   fallback.flightDay,
-  });
-
-  return fallback;
+  return null;
 }
 
 // ─── Internal state ───────────────────────────────────────────────────────────
@@ -905,24 +818,19 @@ async function runPollCycle(io) {
     const telemetry = await fetchBestTelemetry();
     io.emit('telemetry_update', telemetry);
   } catch (err) {
-    logger.error('Catastrophic telemetry failure — emitting emergency fallback', {
+    logger.error('Catastrophic telemetry failure — emitting null telemetry', {
       error: err.message,
     });
-    const emergency = buildPredicted(false);
-    io.emit('telemetry_update', emergency);
+    io.emit('telemetry_update', null);
   }
 }
 
 // ─── Public API ───────────────────────────────────────────────────────────────
 
 function startTelemetryStream(io) {
-  const metH = missionElapsedHours();
-  logger.info('Telemetry stream starting (v4 — DSN primary)', {
-    launchDate: LAUNCH_DATE.toISOString(),
-    metHours:   metH.toFixed(1),
-    flightDay:  Math.floor(metH / 24) + 1,
-    flybyWindow: isFlybyWindow(),
-    pollMs:     POLL_INTERVAL_MS,
+  logger.info('Telemetry stream starting (live-only)', {
+    pollMs: POLL_INTERVAL_MS,
+    source: 'JPL_HORIZONS + DSN_LINK_STATUS',
   });
 
   // Emit immediately, then on every interval tick
@@ -942,4 +850,4 @@ function stopTelemetryStream() {
 process.once('SIGTERM', stopTelemetryStream);
 process.once('SIGINT',  stopTelemetryStream);
 
-module.exports = { startTelemetryStream, stopTelemetryStream, buildPredicted, PHASES };
+module.exports = { startTelemetryStream, stopTelemetryStream };
