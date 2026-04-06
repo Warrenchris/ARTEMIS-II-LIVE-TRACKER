@@ -36,20 +36,25 @@ export const CONNECTION_STATES = Object.freeze({
 });
 
 const DEFAULT_TELEMETRY = Object.freeze({
-  timestamp:           null,
-  lastUpdated:         null,
-  isLive:              false,
-  missionElapsedHours: '0.00',
-  distanceFromEarthKm: '0',
-  distanceToMoonKm:    '384400',
-  speedKmS:            '0.000',
-  altitudeKm:          '0',
-  phaseId:             'launch',
-  phase:               'Pre-launch',
-  position:            { x: 0, y: 0, z: 0 },
-  telemetryHealth:     'NOMINAL',
-  commsLatencyMs:      0,
-  connectionState:     CONNECTION_STATES.CONNECTING,
+  timestamp:              null,
+  lastUpdated:            null,
+  isLive:                 false,
+  missionElapsedHours:    '0.00',
+  flightDay:              1,
+  distanceFromEarthKm:    '0',
+  distanceToMoonKm:       '384400',
+  speedKmS:               '0.000',
+  altitudeKm:             '0',
+  relativeVelocityKmS:    null,   // km/s relative to Moon's centre of mass
+  phaseId:                'launch',
+  phase:                  'Pre-launch',
+  position:               { x: 0, y: 0, z: 0 },
+  telemetryHealth:        'NOMINAL',
+  dataSource:             'UNKNOWN',    // 'NASA_DSN' | 'JPL_HORIZONS' | 'PREDICTED_MODEL'
+  dsnLinkActive:          false,        // true when DSN antenna is actively tracking Orion
+  statusLabel:            'CONNECTING', // derived label for the UI status badge
+  commsLatencyMs:         0,
+  connectionState:        CONNECTION_STATES.CONNECTING,
 });
 
 // ─── Contexts ─────────────────────────────────────────────────────────────────
@@ -154,10 +159,36 @@ export const TelemetryProvider = ({ children }) => {
 
     socket.on('telemetry_update', (data) => {
       const now = Date.now();
+
+      // Derive a human-readable status label for the HUD badge.
+      // Priority: LIVE (DSN ranging / Horizons vectors) → PREDICTED → error states
+      let statusLabel;
+      if (data.telemetryHealth === 'NOMINAL') {
+        if (data.dataSource === 'NASA_DSN') {
+          // Primary source: confirmed-live DSN ranging data
+          statusLabel = 'LIVE TELEMETRY (NASA DSN)';
+        } else if (data.dataSource === 'JPL_HORIZONS') {
+          statusLabel = data.dsnLinkActive
+            ? 'LIVE TELEMETRY (NASA DSN)'
+            : 'LIVE TELEMETRY (JPL HORIZONS)';
+        } else {
+          statusLabel = 'LIVE TELEMETRY';
+        }
+      } else if (data.telemetryHealth === 'PREDICTED') {
+        statusLabel = 'PREDICTED';
+      } else if (data.telemetryHealth === 'DEGRADED') {
+        statusLabel = 'DEGRADED SIGNAL';
+      } else if (data.telemetryHealth === 'STALE') {
+        statusLabel = 'STALE DATA';
+      } else {
+        statusLabel = data.telemetryHealth ?? 'UNKNOWN';
+      }
+
       mergeTelemetry({
         ...data,
         lastUpdated:     now,
-        isLive:          true,
+        isLive:          data.telemetryHealth !== 'PREDICTED',
+        statusLabel,
         connectionState: CONNECTION_STATES.SYNCED,
       });
     });
